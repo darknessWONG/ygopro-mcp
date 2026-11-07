@@ -1,0 +1,146 @@
+{
+  "generatedAt": "2026-11-05T18:45:29.531Z",
+  "stamp": "20261106-022429",
+  "exe": "2026-11-04 22:00:40 / 6,237,184 B (pre-refactor)",
+  "games": [
+    {
+      "game": 1,
+      "started": true,
+      "turns": 12,
+      "winPlayer": 1,
+      "winReasonName": "LP_ZERO",
+      "endCause": "win",
+      "hostDec": 93,
+      "guestDec": 107,
+      "retriesH": 4,
+      "retriesG": 2,
+      "ui": {
+        "uiAction": 193,
+        "uiVerified": 94,
+        "fallback": 106,
+        "fallbackNoEffect": 8,
+        "placeVerified": 26,
+        "skip": 5,
+        "execException": 0
+      },
+      "traps": {
+        "set": 1,
+        "activate": 0,
+        "chain": 0
+      },
+      "keywords": {
+        "host": {
+          "uiAction": true,
+          "uiFallback": true,
+          "pipe": true,
+          "chainModeApplied": true,
+          "uiModeReady": true
+        },
+        "guest": {
+          "uiAction": true,
+          "uiFallback": true,
+          "pipe": true,
+          "chainModeApplied": true,
+          "uiModeReady": true
+        }
+      }
+    },
+    {
+      "game": 2,
+      "started": true,
+      "turns": 16,
+      "winPlayer": 1,
+      "winReasonName": "LP_ZERO",
+      "endCause": "win",
+      "hostDec": 141,
+      "guestDec": 100,
+      "retriesH": 1,
+      "retriesG": 2,
+      "ui": {
+        "uiAction": 249,
+        "uiVerified": 121,
+        "fallback": 120,
+        "fallbackNoEffect": 10,
+        "placeVerified": 35,
+        "skip": 6,
+        "execException": 0
+      },
+      "traps": {
+        "set": 4,
+        "activate": 0,
+        "chain": 3
+      },
+      "keywords": {
+        "host": {
+          "uiAction": true,
+          "uiFallback": true,
+          "pipe": true,
+          "chainModeApplied": true,
+          "uiModeReady": true
+        },
+        "guest": {
+          "uiAction": true,
+          "uiFallback": true,
+          "pipe": true,
+          "chainModeApplied": true,
+          "uiModeReady": true
+        }
+      }
+    }
+  ],
+  "sampler": {
+    "summary": {
+      "7788:wChat": 150,
+      "7788:wCmdMenu": 1,
+      "7788:wMessage": 1,
+      "7788:wPosSelect": 1,
+      "7788:wQuery": 1,
+      "7789:wCardSelect": 1,
+      "7789:wChat": 149,
+      "7789:wMessage": 1,
+      "7789:wPosSelect": 1,
+      "7789:wQuery": 1
+    },
+    "totals": {
+      "samples": 299,
+      "duelSamples": 150,
+      "idleSamples": 43,
+      "shots": 26,
+      "gamesSeen": 2
+    },
+    "stuck": []
+  },
+  "summary": {
+    "placeVerifiedTotal": 61,
+    "uiVerifiedRatio": 0.486,
+    "uiActionTotal": 442,
+    "uiVerifiedTotal": 215,
+    "fallbackTotal": 226,
+    "execExceptionTotal": 0,
+    "skipTotal": 11,
+    "turnsTotal": 28,
+    "hostDecTotal": 234,
+    "guestDecTotal": 207,
+    "retriesTotal": 9,
+    "trapsTotal": {
+      "set": 5,
+      "activate": 0,
+      "chain": 3
+    },
+    "windows": {
+      "7788:wChat": 150,
+      "7788:wCmdMenu": 1,
+      "7788:wMessage": 1,
+      "7788:wPosSelect": 1,
+      "7788:wQuery": 1,
+      "7789:wCardSelect": 1,
+      "7789:wChat": 149,
+      "7789:wMessage": 1,
+      "7789:wPosSelect": 1,
+      "7789:wQuery": 1
+    },
+    "stuckWindows": [],
+    "startedGames": 2,
+    "gamesTotal": 2
+  }
+}

@@ -1,0 +1,14 @@
+﻿import { spawn } from 'node:child_process';
+const exe = 'D:\\dsh_workspaces\\MC_bot_dsh\\mycard-client\\bin\\release\\x64\\YGOPro.exe';
+const cwd = 'D:\\dsh_workspaces\\MC_bot_dsh\\mycard-bot\\game';
+const cmd = `start "" /D "${cwd}" "${exe}" -h 127.0.0.1 -p 7911 -d Blackwing -k`;
+console.log('cmd =', cmd);
+const p = spawn('cmd.exe', ['/c', cmd], { stdio: 'ignore', detached: true, windowsHide: false });
+p.on('error', (e) => console.log('spawn error', e.message));
+p.unref();
+await new Promise((r) => setTimeout(r, 9000));
+const ps = spawn('powershell', ['-NoProfile','-Command', "(Get-Process | Where-Object { $_.ProcessName -match 'ygopro' } | Select-Object Id,MainWindowHandle,Path | ConvertTo-Json -Compress)"], { encoding: 'utf8' });
+let out = '';
+ps.stdout.on('data', (d) => out += d);
+await new Promise((r) => ps.on('close', r));
+console.log('procs =', out);

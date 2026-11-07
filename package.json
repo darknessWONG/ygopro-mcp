@@ -1,0 +1,38 @@
+{
+  "name": "ygopro-mcp",
+  "version": "0.1.0",
+  "description": "MCP bridge for an instrumented YGOPro client: an LLM/agent plays Yu-Gi-Oh! through a semantic HTTP/JSON control layer.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "ygopro-mcp": "mcp-server.mjs",
+    "ygopro-doctor": "doctor.mjs"
+  },
+  "scripts": {
+    "start": "node mcp-server.mjs",
+    "doctor": "node doctor.mjs",
+    "supervisor": "node supervisor.mjs --profile lan",
+    "policy": "node policy-semantic.mjs",
+    "probe": "node net-probe.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {},
+  "files": [
+    "*.mjs",
+    "*.md",
+    "docs/",
+    "examples/",
+    "LICENSE",
+    ".env.example"
+  ],
+  "keywords": [
+    "yugioh",
+    "ygopro",
+    "mcp",
+    "model-context-protocol",
+    "agent",
+    "duel"
+  ]
+}

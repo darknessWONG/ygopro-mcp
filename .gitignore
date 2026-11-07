@@ -1,0 +1,21 @@
+# bridge/.gitignore —— 只忽略"可再生成/证据类"文件；脚本与文档全部入库
+# （本目录将作为 ygopro-mcp 分发包；dev/ 里的脚本保留，但 artifacts 不入库）
+
+# dev 证据（截图、MCP 自测输出、临时日志）
+dev/artifacts/
+*.png
+mcp-*.jsonl
+mcp-*.txt
+
+# 运行产物/日志（运行脚本会在仓库根 ranked/ 或本目录旁生成）
+*.log
+ranked/
+logs/
+
+# node 依赖/环境文件（本项目零依赖，但防止误提交）
+node_modules/
+.env
+
+# 系统垃圾
+Thumbs.db
+.DS_Store

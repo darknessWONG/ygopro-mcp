@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "ygopro": {
+      "command": "node",
+      "args": ["C:/path/to/bridge/mcp-server.mjs"],
+      "env": {
+        "CONTROL_URL": "http://127.0.0.1:7788"
+      }
+    }
+  }
+}
