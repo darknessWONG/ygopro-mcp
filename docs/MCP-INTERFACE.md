@@ -141,6 +141,21 @@
 ]}
 ```
 
+**先/后攻（`kind:"tp"`，MCP 驱动时必须由 LLM 选择）**
+
+- 控制层**收到过任意 HTTP 请求**后（`g_controlDriven`），客户端收到 `STOC_SELECT_TP` 时**不再自动发**
+  `CTOS_TPResult`：`/prompt` 会给出 `awaiting:true, tpPending:true, tpOptions:[1,2]`，`/actions` 返回：
+  ```json
+  {"actions":[
+    {"id":0,"kind":"tp","label":"tp first (index=1)","index":1},
+    {"id":1,"kind":"tp","label":"tp second (index=2)","index":2}
+  ],"awaiting":true,"tpPending":true}
+  ```
+- `/act_id?id=0` → 先攻（`res=1`）；`/act_id?id=1` → 后攻（`res=2`）；日志 `TP choice res=N (from control)`。
+- 纯手动（从未收到 HTTP 请求）保持旧行为：自动选 `res=2`，不发布 tp prompt。
+- `YGO_TP=1|2` 仍作为强制覆盖（优先于以上两种），日志 `TP choice res=N (forced by YGO_TP)`。
+- 等待选择期间该 prompt 与普通 prompt 一样被冻结（`/prompt`/`/actions` 快照一致）。
+
 **HTTP 端点全表**（MCP 未全暴露，但可直连；`7788`=房主、`7789`=客人）
 
 | 端点 | 方法 | 说明 |
@@ -382,6 +397,7 @@ body = PromptJson(g_shared);
 | `chain` | `MSG_SELECT_CHAIN`(16) | `chain #0 code=84749824` | `index` 直接回给内核（多效果卡再弹 option） |
 | `decline` | 16 且 `!chainForced` | `do not chain` | `-1` |
 | `yes` / `no` | `MSG_SELECT_YESNO`(13)/`MSG_SELECT_EFFECTYN`(12) | `yes` / `no` | `1` / `0` |
+| `tp` | `STOC_SELECT_TP`（开局前，非 `curMsg`；`prompt.tpPending=true`） | `tp first (index=1)` / `tp second (index=2)` | 按 `id` 提交即发 `CTOS_TP_RESULT`：`index=1` 先攻 / `2` 后攻；仅 MCP 驱动时出现（手动或 `YGO_TP` 强制时客户端自动应答） |
 | `option` | `MSG_SELECT_OPTION`(14) | `option #0`（另有一个兜底 `option 0`） | index=选项下标 → 直接回 |
 | `select` | `MSG_SELECT_CARD`(15)/`SELECT_TRIBUTE`(20)/`SELECT_UNSELECT_CARD`(26) | `select first N card(s)` | 一次选前 N 张（N=`selectMin` 或 1） |
 | `position` | `MSG_SELECT_POSITION`(19) | `attack position` / `defense position` | `0x01` / `0x02` |
@@ -697,7 +713,7 @@ $env:YGO_UI_ACTIONS='0'; powershell ... bridge\lan-run.ps1 -Games 1
 5. **链字段有 1 帧延迟**：`/state` 与 `/prompt` 的链字段来自 UI 线程快照；`chainStack[].forced` 恒 false、`type` 固定 `effect`。
 6. **UI 模式个别动作有 600ms 校验延迟**（点不中时才会走满）。
 7. **多效果卡默认点第 0 个 option**（可能不是最优效果）；`announce/counter/sort/sum` 是"安全默认"而非最优。
-8. **线上排位：能完整打完，但胜率依赖策略**：客户端/管线侧已实测可拿房→进房→选卡组→准备→完整对局→自然结算（LP_ZERO 等），并支持受控掉线后约 13s 重连回同房继续打；输局主要是 policy 保守（大量 `decline`/`to_bp`/`end`），不是管线卡死。**排位相关新字段（`/state.deckError`、`/state.isWin/isLoss/isDraw`、`/state.pipeline.recentMsgs`、`CHAIN raw` 等）只在客户端 `2026-11-07 13:05:40 / 6,288,896 B` 及之后存在**；旧 exe 请先升级。详见 [`RANKED-REPORT.md`](RANKED-REPORT.md)。
+8. **线上排位：能完整打完，但胜率依赖策略**：客户端/管线侧已实测可拿房→进房→选卡组→准备→完整对局→自然结算（LP_ZERO 等），并支持受控掉线后约 13s 重连回同房继续打；输局主要是 policy 保守（大量 `decline`/`to_bp`/`end`），不是管线卡死。**排位相关新字段（`/state.deckError`、`/state.isWin/isLoss/isDraw`、`/state.lpOrder`、`/state.pipeline.recentMsgs`、`/state.tpPending`+`/state.tpOptions`、`/actions` 的先/后攻动作 `kind:"tp"`+`index:1|2`、`CHAIN raw` 等）只在客户端 `2026-11-08 03:38:41 / 6,290,944 B` 及之后存在**；旧 exe 请先升级。详见 [`RANKED-REPORT.md`](RANKED-REPORT.md)。
 
 ---
 

@@ -33,7 +33,7 @@ const JSON_ONLY = argv.includes('--json');
 const TIMEOUT = Math.max(200, Number(opt('timeout', 1500)) || 1500);
 
 // Fingerprint of the client build this bridge is developed/tested against (see README).
-const EXPECTED = { size: 6288896, mtime: '2026-11-07 13:05:40' };
+const EXPECTED = { size: 6290944, mtime: '2026-11-08 03:38:41' };
 
 const C = { green: (s) => `[GREEN]  ${s}`, yellow: (s) => `[YELLOW] ${s}`, red: (s) => `[RED]    ${s}`, info: (s) => `[INFO]   ${s}` };
 

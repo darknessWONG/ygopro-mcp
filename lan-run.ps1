@@ -422,9 +422,23 @@ for ($g = 1; $g -le $Games; $g++) {
             $lb = Http-GetJson 'http://127.0.0.1:7788/lobby'
             if ($null -ne $lb) { Write-Run ("  lobby={0}" -f ($lb | ConvertTo-Json -Compress)) }
             $null = Call-Api 'http://127.0.0.1:7788/start' '7788 /start'
-            # 等开局
+            # 等开局（2026-11-08: SELECT_TP 现在由控制层决定 → 必须先答 TP，否则客户端不会 started）
             $deadlineStart = (Get-Date).AddSeconds(25)
+            $tpPicked = $false
             while ((Get-Date) -lt $deadlineStart) {
+                if (-not $tpPicked) {
+                    foreach ($tpPort in 7788, 7789) {
+                        $tpPrompt = Http-GetJson ("http://127.0.0.1:{0}/prompt" -f $tpPort) 3
+                        if ($tpPrompt -and [bool]$tpPrompt.tpPending) {
+                            $tpSeq = [int]$tpPrompt.seq
+                            $tpUrl = "http://127.0.0.1:{0}/act_id?seq={1}&id=0" -f $tpPort, $tpSeq
+                            $tpResp = Call-Api $tpUrl ("{0} /act_id(TP)" -f $tpPort)
+                            Write-Run ("  TP pending on {0} -> answered first (seq={1}) resp={2}" -f $tpPort, $tpSeq, [string]$tpResp)
+                            $tpPicked = $true
+                            break
+                        }
+                    }
+                }
                 Start-Sleep -Seconds 2
                 $hs = Get-State 7788
                 $gs = Get-State 7789

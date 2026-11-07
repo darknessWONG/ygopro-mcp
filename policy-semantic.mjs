@@ -62,6 +62,8 @@
 //   DIAG_EVERY_MS           default 30000   minimum gap between repeated STALL blocks
 //   ESCALATE_AFTER          default 3       same-curMsg repeats before switching answers
 //   TRAP_GOAL               default 1       priority for the three goal traps (=0 disables)
+//   TP_PREF                 default first   first|second turn choice when the client offers
+//                                           `kind:"tp"` actions (logs `TP-PICK first (index=1)`)
 //   MAX_IDLE_ACTIONS        default 5       hard guard: consecutive answer attempts that leave the
 //                                           duel state unchanged (turn/phase/LP/hand/deck/grave/mon/
 //                                           chain/win/curMsg all identical) -> STALL HARD + exit 2
@@ -98,6 +100,9 @@ const CFG = {
   diagEveryMs: Number(process.env.DIAG_EVERY_MS || 30000),
   escalateAfter: Math.max(2, Number(process.env.ESCALATE_AFTER || 3)),
   maxIdleActions: Math.max(1, Number(cliArg('max-idle-actions') ?? process.env.MAX_IDLE_ACTIONS ?? 5)),
+  // first/second-turn preference when the client offers `kind:"tp"` actions (tpPending):
+  //   first  = 先攻 (default; Blackwing likes to go first)   second = 后攻
+  tpPref: String(process.env.TP_PREF || 'first').toLowerCase() === 'second' ? 'second' : 'first',
 };
 
 // Msg ids for which answering with the generic "safe default" (`auto`) is harmless: these are
@@ -163,6 +168,7 @@ const S = {
   trapsSet: 0,         // face-down sets of spells/traps (goal traps + generic)
   autos: 0,            // `auto` safe-default actions actually sent (whitelisted msgs only)
   autoBlocked: 0,      // `auto`-only prompts on unknown msgs that we refused to answer
+  tpPicks: 0,          // first/second-turn (tp) choices sent to the kernel
   notAwaitingSkips: 0, // /actions results with awaiting=false that we refused to act on
   chainsTaken: 0,
   chainsDeclined: 0,
@@ -190,7 +196,7 @@ function printStats(reason) {
   log(`stats reason=${reason} uptime=${uptime()}s acted=${S.acted} skippedStale=${S.skippedStale}` +
     ` escalations=${S.escalations} heartbeats=${S.heartbeats} stalls=${S.stalls} emptyBursts=${S.emptyBursts}` +
     ` trapsActivated=${S.trapsActivated} trapsSet=${S.trapsSet} chainsTaken=${S.chainsTaken} chainsDeclined=${S.chainsDeclined}` +
-    ` autos=${S.autos} autoBlocked=${S.autoBlocked} notAwaiting=${S.notAwaitingSkips}` +
+    ` autos=${S.autos} autoBlocked=${S.autoBlocked} notAwaiting=${S.notAwaitingSkips} tpPicks=${S.tpPicks}` +
     ` win=${S.win === null ? 'unknown' : S.win} result=${S.result ?? 'unknown'}` +
     `${S.winReason ? '(' + S.winReason + ')' : ''}` +
     ` actErrors=${S.actErrors} actRetries=${S.actRetries} httpErrors=${S.httpErrors} loops=${S.loops}` +
@@ -507,6 +513,8 @@ function noteActionStats(act) {
     if (code != null) SET_PER_TURN.codes.add(Number(code));
     SET_PER_TURN.count++;
     if (act.kind === 'set_spell') S.trapsSet++;   // a face-down spell/trap (goal trap or generic)
+  } else if (act.kind === 'tp') {
+    S.tpPicks++;                                  // first/second-turn choice sent to the kernel
   }
 }
 
@@ -635,8 +643,41 @@ function chooseMission(actions) {
   if (chain.length) return chain[0];
   return null;
 }
+/** first/second-turn (tp) choice: prefer first by default (Blackwing wants to go first). */
+function pickTp(actions, byKind) {
+  const tps = byKind('tp');
+  if (!tps.length) return null;
+  const pref = CFG.tpPref === 'second' ? 2 : 1;
+  // The client may put the semantic index on the action itself ({"kind":"tp","index":1}) and/or in
+  // the label ("tp first (index=1)"). Trust the field first (1=first, 2=second), then the label,
+  // then the array order (the client lists [first, second]).
+  const idxOf = (a) => {
+    const field = Number(a.index);
+    if (field === 1 || field === 2) return field;
+    const label = String(a.label || '');
+    const m = /index\s*[=:]\s*(\d+)/i.exec(label);
+    if (m) return Number(m[1]);
+    if (/first|先攻/i.test(label)) return 1;
+    if (/second|后攻/i.test(label)) return 2;
+    return null;                          // no explicit signal: fall back to array order
+  };
+  // If the label carries no index/word, assume the client lists them in order (1 = first, 2 = second).
+  const cands = tps.map((a, i) => ({ act: a, index: idxOf(a) ?? (i + 1) }));
+  const want = cands.find((c) => c.index === pref) || cands.find((c) => c.index === 1) || cands[0];
+  return { act: want.act, index: want.index, pref: want.index === 1 ? 'first' : 'second' };
+}
+
 function choose(actions) {
   const byKind = (k) => actions.filter((a) => a.kind === k);
+
+  // ---- 0) TP (first/second turn) choice, when the client offers it (tpPending):
+  //         default = first (Blackwing likes to go first); TP_PREF=second flips it.
+  const tp = pickTp(actions, byKind);
+  if (tp) {
+    // /act_id takes the action id (client: id 0 = first, id 1 = second); the index is the semantic value.
+    log(`TP-PICK ${tp.pref} (index=${tp.index}) id=${tp.act.id} [TP_PREF=${CFG.tpPref}]`);
+    return tp.act;
+  }
 
   // Trap opportunities are computed up-front: MISSION has to yield to them (otherwise it would
   // swallow the set/activate/chain window and the traps would stay in hand forever), and they are

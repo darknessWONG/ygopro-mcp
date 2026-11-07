@@ -27,7 +27,7 @@
 
 | 需要 | 说明 |
 |---|---|
-| **带控制层的 YGOPro 客户端** | 本仓库**不包含**客户端二进制。控制层是客户端源码里的扩展（`gframe/control*.cpp`，HTTP 端点 `/state` `/prompt` `/wait_prompt` `/actions` `/act_id` `/net` `/ui` 等）。<br>**已测试构建**：`YGOPro.exe` **`2026-11-07 13:05:40` / `6,288,896 B`**（用 `node doctor.mjs --client <exe>` 可核对指纹）。<br>客户端源码（fork，GPLv2）：<https://github.com/darknessWONG/ygopro-control-layer>（分支 `feat/mcp-control`）；自行编译后产物放到例如 `mycard-client/bin/release/x64/YGOPro.exe`。 |
+| **带控制层的 YGOPro 客户端** | 本仓库**不包含**客户端二进制。控制层是客户端源码里的扩展（`gframe/control*.cpp`，HTTP 端点 `/state` `/prompt` `/wait_prompt` `/actions` `/act_id` `/net` `/ui` 等）。<br>**已测试构建**：`YGOPro.exe` **`2026-11-08 03:38:41` / `6,290,944 B`**（用 `node doctor.mjs --client <exe>` 可核对指纹）。<br>构建：用带控制层补丁的 YGOPro 源码（MyCard 客户端 fork）自行编译，产物放到例如 `mycard-client/bin/release/x64/YGOPro.exe`。 |
 | **Node.js ≥ 18** | 只用内置模块（`fetch`/`http`/`child_process`），**零 npm 依赖**。 |
 | （可选）卡组 `.ydk` | 客户端自己的 `deck/` 目录；控制层用 `POST /deck?name=Blackwing` 预载。本仓库不含卡图/卡表。 |
 

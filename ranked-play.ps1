@@ -65,6 +65,15 @@ Set-Content -Path (Join-Path $evd 'room.json') -Value ($room | ConvertTo-Json -C
 $joinUrl = "http://127.0.0.1:7788/join?ip={0}&port={1}&pass={2}" -f $room.address, $room.port, [uri]::EscapeDataString($room.password)
 W "join -> $(JGet $joinUrl)"
 
+# 3b) start the policy BEFORE ready/start: the first/ /second choice (kind:"tp") is asked during
+#     the TP step, i.e. before /state.started becomes true, so the agent must already be polling.
+$env:CONTROL_URL = 'http://127.0.0.1:7788'
+$env:MAX_MINUTES = "$MaxPlayMinutes"
+$env:NO_PROGRESS_MS = '60000'
+$polLog = Join-Path $evd 'policy.log'
+$polErr = Join-Path $evd 'policy.err.log'
+$p = Start-Process -FilePath 'node' -ArgumentList @((Join-Path $root 'bridge\policy-semantic.mjs')) -RedirectStandardOutput $polLog -RedirectStandardError $polErr -PassThru -WindowStyle Hidden
+W "policy pid=$($p.Id) started before ready/start (answers TP)"
 # 4) deck + ready (send early and repeatedly; the server starts once both players are ready)
 $started = $false; $readySends = 0; $deckSent = $false
 for ($i = 1; $i -le 45; $i++) {
@@ -97,15 +106,9 @@ if (-not $started) {
 }
 W 'DUEL STARTED'
 
-# 5) play with the semantic policy
-$env:CONTROL_URL = 'http://127.0.0.1:7788'
-$env:MAX_MINUTES = "$MaxPlayMinutes"
-$env:NO_PROGRESS_MS = '60000'
-$polLog = Join-Path $evd 'policy.log'
-$polErr = Join-Path $evd 'policy.err.log'
+# 5) play (policy already running since step 3b)
 $deadline = (Get-Date).AddMinutes($MaxPlayMinutes + 2)
-$p = Start-Process -FilePath 'node' -ArgumentList @((Join-Path $root 'bridge\policy-semantic.mjs')) -RedirectStandardOutput $polLog -RedirectStandardError $polErr -PassThru -WindowStyle Hidden
-W "policy pid=$($p.Id) max=$MaxPlayMinutes min"
+W "policy (already running) pid=$($p.Id) max=$MaxPlayMinutes min"
 $shotEvery = 60; $nextShot = (Get-Date); $script:diagTick = 0
 $winPlayer = -1; $winReason = -1
 while ((Get-Date) -lt $deadline) {
