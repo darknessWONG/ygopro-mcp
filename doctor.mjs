@@ -30,10 +30,18 @@ const PORT = Number(cliPort || (envBase.match(/:(\d+)/) || [])[1] || 7788);
 const BASE = `${HOST}:${PORT}`;
 const CLIENT_EXE = opt('client', null);
 const JSON_ONLY = argv.includes('--json');
+// --strict-build: compare size AND sha256 (release self-check). Default compares size only, which is
+// portable across machines/timezones/copies; sha256 is the stable way to tell two builds of the same
+// size apart (a real case: 22:51:31 and 00:07:02 are both 6,295,040 B).
+const STRICT_BUILD = argv.includes('--strict-build');
 const TIMEOUT = Math.max(200, Number(opt('timeout', 1500)) || 1500);
 
 // Fingerprint of the client build this bridge is developed/tested against (see README).
-const EXPECTED = { size: 6295040, mtime: '2026-11-09 22:51:31' };
+const EXPECTED = {
+  size: 6295040,
+  mtime: '2026-11-10 00:07:02',
+  sha256: '05E86D34506DBABBF307D972A0BFA184CE05EFEE98442C7F482690DD25C4A10D',
+};
 
 const C = { green: (s) => `[GREEN]  ${s}`, yellow: (s) => `[YELLOW] ${s}`, red: (s) => `[RED]    ${s}`, info: (s) => `[INFO]   ${s}` };
 
@@ -51,17 +59,23 @@ async function getJson(path) {
 }
 
 function fingerprintClient() {
-  if (!CLIENT_EXE) return { version: 'unknown', source: 'not provided', matchesExpected: null };
+  if (!CLIENT_EXE) return { version: 'unknown', source: 'not provided', matchesExpected: null, strictOk: null };
   try {
     const fs = require('node:fs');
+    const crypto = require('node:crypto');
     const st = fs.statSync(String(CLIENT_EXE));
     const pad = (n) => String(n).padStart(2, '0');
     const d = st.mtime;
     const mtime = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-    const version = `${st.size} B / ${mtime}`;
-    return { version, source: String(CLIENT_EXE), matchesExpected: st.size === EXPECTED.size, size: st.size, mtime };
+    const sha256 = crypto.createHash('sha256').update(fs.readFileSync(String(CLIENT_EXE))).digest('hex').toUpperCase();
+    const sizeOk = st.size === EXPECTED.size;
+    const shaOk = sha256 === EXPECTED.sha256;
+    const version = `${st.size} B / ${mtime} / sha256 ${sha256.slice(0, 12)}…`;
+    // default: size only (portable). --strict-build: size AND sha256 (release self-check).
+    const matchesExpected = STRICT_BUILD ? (sizeOk && shaOk) : sizeOk;
+    return { version, source: String(CLIENT_EXE), matchesExpected, sizeOk, shaOk, strictOk: sizeOk && shaOk, size: st.size, mtime, sha256 };
   } catch (e) {
-    return { version: 'unknown', source: String(CLIENT_EXE), error: String(e.message || e), matchesExpected: null };
+    return { version: 'unknown', source: String(CLIENT_EXE), error: String(e.message || e), matchesExpected: null, strictOk: null };
   }
 }
 // `require` is available via createRequire (declared at the top of this module)
@@ -181,10 +195,17 @@ if (ui.ok && ui.data) {
 const fp = fingerprintClient();
 report.version = fp.version;
 report.versionSource = fp.source;
-if (fp.matchesExpected === true) addCheck('client exe', 'GREEN', `matches expected build (${fp.version})`);
-else if (fp.matchesExpected === false) {
-  addCheck('client exe', 'YELLOW', `size ${fp.size} differs from the tested build (${EXPECTED.size} B / ${EXPECTED.mtime})`);
-  hint(`客户端 exe 与已知构建不同（期望 ${EXPECTED.size} B / ${EXPECTED.mtime}）：某些字段（/net、isWin、deckError）可能缺失`);
+report.versionSha256 = fp.sha256 ?? null;
+if (fp.matchesExpected === true) {
+  addCheck('client exe', 'GREEN',
+    `matches expected build (${fp.version})` +
+    (STRICT_BUILD ? ' [strict: size+sha256]' : ' [size check only; use --strict-build for sha256]'));
+} else if (fp.matchesExpected === false) {
+  const why = fp.sizeOk === false
+    ? `size ${fp.size} differs from the tested build (${EXPECTED.size} B)`
+    : `sha256 differs from the tested build (expected ${String(EXPECTED.sha256).slice(0, 12)}…)`;
+  addCheck('client exe', 'YELLOW', `does not match the tested build: ${why}`);
+  hint(`客户端 exe 与已测试构建不同（期望 ${EXPECTED.size} B / sha256 ${String(EXPECTED.sha256).slice(0, 12)}…）：某些字段（/net、isWin、sidePending、DUEL_START 重置）可能缺失或行为不同`);
 } else if (CLIENT_EXE) {
   addCheck('client exe', 'YELLOW', `cannot stat ${String(CLIENT_EXE)}`);
 } else {

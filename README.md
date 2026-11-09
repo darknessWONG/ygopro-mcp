@@ -27,7 +27,7 @@
 
 | 需要 | 说明 |
 |---|---|
-| **带控制层的 YGOPro 客户端** | 本仓库**不包含**客户端二进制。控制层是客户端源码里的扩展（`gframe/control*.cpp`，HTTP 端点 `/state` `/prompt` `/wait_prompt` `/actions` `/act_id` `/net` `/ui` 等）。<br>**已测试构建**：`YGOPro.exe` **`2026-11-09 22:51:31` / `6,295,040 B`**（用 `node doctor.mjs --client <exe>` 可核对指纹）。<br>构建：用带控制层补丁的 YGOPro 源码（MyCard 客户端 fork）自行编译，产物放到例如 `mycard-client/bin/release/x64/YGOPro.exe`。 |
+| **带控制层的 YGOPro 客户端** | 本仓库**不包含**客户端二进制。控制层是客户端源码里的扩展（`gframe/control*.cpp`，HTTP 端点 `/state` `/prompt` `/wait_prompt` `/actions` `/act_id` `/net` `/ui` 等）。<br>**已测试构建**：`YGOPro.exe` **`2026-11-10 00:07:02` / `6,295,040 B`**<br>SHA256：`05E86D34506DBABBF307D972A0BFA184CE05EFEE98442C7F482690DD25C4A10D`<br>核对：`node doctor.mjs --client <exe>`（默认比 size；加 `--strict-build` 同时比 sha256 —— 用于区分"同 size 不同 build"）。<br>构建：用带控制层补丁的 YGOPro 源码（MyCard 客户端 fork）自行编译，产物放到例如 `mycard-client/bin/release/x64/YGOPro.exe`。 |
 | **Node.js ≥ 18** | 只用内置模块（`fetch`/`http`/`child_process`），**零 npm 依赖**。 |
 | （可选）卡组 `.ydk` | 客户端自己的 `deck/` 目录；控制层用 `POST /deck?name=Blackwing` 预载。本仓库不含卡图/卡表。 |
 
@@ -78,11 +78,15 @@ lastSeq = prompt.seq
 cd bridge
 npm run doctor              # = node doctor.mjs（默认探测 127.0.0.1:7788）
 node doctor.mjs --port 7789 # 客机位
-node doctor.mjs --client "C:\path\to\YGOPro.exe"   # 顺带核对 exe 指纹
+node doctor.mjs --client "C:\path\to\YGOPro.exe"   # 顺带核对 exe 指纹（size）
+node doctor.mjs --client "C:\path\to\YGOPro.exe" --strict-build   # 发布自检：size + sha256 都比
 ```
 
 输出 `[GREEN]/[YELLOW]/[RED]/[INFO]` 每项检查 + `HINTS` + `JSON`；**退出码 0 = 全绿，1 = 有问题**。
 没有客户端时会输出 RED 并提示「先启动带控制层的 YGOPro 客户端（房主 7788 / 客机 7789）」。
+
+> `--client` 默认只比 **size**（跨机/跨时区/复制场景都可移植）；加 **`--strict-build`** 时才比 **sha256**。
+> 这两个必须区分：真实出现过"两个不同 build 的 exe 大小完全一样（都是 6,295,040 B）"的情况，只看 size 分辨不出。
 
 ---
 
@@ -119,6 +123,17 @@ node doctor.mjs --client "C:\path\to\YGOPro.exe"   # 顺带核对 exe 指纹
   详见 [`docs/direct-actions.md`](docs/direct-actions.md)。
 - 动作被内核拒绝时看 `/state.retryCount/retryStreak`；prompt 卡住时看 `/state.pipeline` 与
   `pipeline.recentMsgs`（需要新构建）。
+- **Bo3 新局（Game2/3）会重置结果状态**：客户端在 `STOC_DUEL_START` 时把 `winPlayer/winPlayerLocal/winReason`
+  重置为 `-1`、`awaiting=false`、`tpPending/sidePending=false`（日志 `DUEL_START reset result state (match game N)`）。
+  旧客户端可能让新局沿用上一局的 `winPlayer`，导致 policy 一开局就误判"对局已结束"并退出——遇到请升级客户端。
+
+### 更新记录（近期）
+
+- **2026-11-10** 客户端 `00:07:02 / 6,295,040 B`：Bo3 Game2/3 结果状态重置（`DUEL_START reset result state`）；
+  bridge 侧同步 fingerprint + sha256，doctor 新增 `--strict-build`（size+sha256）。
+- **2026-11-09** 客户端：Bo3 换备牌 `side_ok`（`STOC_CHANGE_SIDE`）+ 回放保存框自动跳过（限流 1s）。
+- **2026-11-08** 客户端：先/后攻交给 LLM（`/actions kind:"tp"`）；policy 支持 `TP_PREF`。
+- **2026-11-07** 客户端：排位全链路（拿房→选卡组→准备→对局→自然结算）、`isWin/isLoss/isDraw`、`deckError`、`/net` 探活。
 
 ---
 
