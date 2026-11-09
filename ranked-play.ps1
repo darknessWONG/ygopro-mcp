@@ -118,7 +118,37 @@ while ((Get-Date) -lt $deadline) {
   if ($state) {
     if ($state.winPlayer -ne $null -and [int]$state.winPlayer -ge 0) { $winPlayer = [int]$state.winPlayer; $winReason = [int]$state.winReason; }
   }
-  if ($winPlayer -ge 0) { break }
+  # Bo3 match: after game N ends there is a side-decking step and then game N+1.
+  # Do not stop at the first result - keep the policy alive and wait for the next duel.
+  if ($winPlayer -ge 0) {
+    if (-not $script:gameNo) { $script:gameNo = 1 }
+    if (-not $script:resultLogged -or $script:resultLogged -lt $script:gameNo) {
+      W ("GAME {0} finished: raw={1} isWin={2} reason={3} turn={4}" -f $script:gameNo, $state.winPlayer, $state.isWin, $state.winReasonName, $state.turn)
+      $script:resultLogged = $script:gameNo
+    }
+    $script:newGameDeadline = (Get-Date).AddSeconds(120)
+    # wait for the next game of the match (side decking happens in between)
+    $gotNew = $false
+    while ((Get-Date) -lt $script:newGameDeadline -and (Get-Date) -lt $deadline) {
+      Start-Sleep -Seconds 3
+      $s2raw = JGet 'http://127.0.0.1:7788/state'
+      $s2 = $null; try { $s2 = $s2raw | ConvertFrom-Json } catch {}
+      $n2 = $null; try { $n2 = (JGet 'http://127.0.0.1:7788/net') | ConvertFrom-Json } catch {}
+      if ($s2 -and $s2.PSObject.Properties.Name -contains 'sidePending' -and $s2.sidePending) {
+        W 'side phase detected (waiting for policy side_ok)'
+      }
+      if ($s2 -and [int]$s2.winPlayer -lt 0 -and $s2.started) {
+        W 'next game of the match started'
+        $script:gameNo = [int]$script:gameNo + 1
+        $winPlayer = -1; $winReason = -1
+        $gotNew = $true
+        break
+      }
+      if ($n2 -and $n2.state -eq 'disconnected') { break }
+      if ($p.HasExited) { break }
+    }
+    if (-not $gotNew) { break }
+  }
   if ($p.HasExited) { W "policy exited code=$($p.ExitCode)"; break }
   # periodic diagnostics: capture the exact prompt/actions the policy is looking at
   $script:diagTick = 1 + ([int]$script:diagTick)

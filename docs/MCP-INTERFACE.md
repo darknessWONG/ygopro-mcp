@@ -3,7 +3,7 @@
 > **读者**：后续接手的 LLM / agent / 工程师。**只读本文档 + 附录即可接入**，不需要先读懂 ygopro 协议。
 >
 > **适用版本（当前正式版 exe）**：`mycard-client/bin/release/x64/YGOPro.exe`
-> = **2026-11-06 22:23:28 / 6,275,584 B**；**验收版 = 22:03:58 / 6,275,584 B**（两者差异仅
+> = **2026-11-09 22:51:31 / 6,295,040 B**（Bo3 换备牌 + 回放框跳过版；验收/历史版本见文末记录）
 > `/state.resume.reason` 在加载成功时返回 `"loaded"`，行为不变；22:23:28 已做过冒烟）。
 > 该版含重连基础能力：`GET /net`、自动 `/tip` 探活、`YGO_SUPPRESS_MODALS` 模态框抑制、
 > `resume-context-<port>.json` journal、`POST /leave`（详见 [RECONNECT-DESIGN.md](RECONNECT-DESIGN.md)、[reconnect-lab.md](reconnect-lab.md)）。
@@ -398,6 +398,7 @@ body = PromptJson(g_shared);
 | `decline` | 16 且 `!chainForced` | `do not chain` | `-1` |
 | `yes` / `no` | `MSG_SELECT_YESNO`(13)/`MSG_SELECT_EFFECTYN`(12) | `yes` / `no` | `1` / `0` |
 | `tp` | `STOC_SELECT_TP`（开局前，非 `curMsg`；`prompt.tpPending=true`） | `tp first (index=1)` / `tp second (index=2)` | 按 `id` 提交即发 `CTOS_TP_RESULT`：`index=1` 先攻 / `2` 后攻；仅 MCP 驱动时出现（手动或 `YGO_TP` 强制时客户端自动应答） |
+| `side_ok` | `STOC_CHANGE_SIDE`（Bo3 换备牌阶段；`prompt.sidePending=true`） | `keep side deck (no changes) and continue` | 按 `id=0` 提交 → UI 注入点 `btnSideOK`（= 真人"确定"，会 `SendUpdateDeck`）；仅 MCP 驱动时出现 |
 | `option` | `MSG_SELECT_OPTION`(14) | `option #0`（另有一个兜底 `option 0`） | index=选项下标 → 直接回 |
 | `select` | `MSG_SELECT_CARD`(15)/`SELECT_TRIBUTE`(20)/`SELECT_UNSELECT_CARD`(26) | `select first N card(s)` | 一次选前 N 张（N=`selectMin` 或 1） |
 | `position` | `MSG_SELECT_POSITION`(19) | `attack position` / `defense position` | `0x01` / `0x02` |
@@ -713,7 +714,7 @@ $env:YGO_UI_ACTIONS='0'; powershell ... bridge\lan-run.ps1 -Games 1
 5. **链字段有 1 帧延迟**：`/state` 与 `/prompt` 的链字段来自 UI 线程快照；`chainStack[].forced` 恒 false、`type` 固定 `effect`。
 6. **UI 模式个别动作有 600ms 校验延迟**（点不中时才会走满）。
 7. **多效果卡默认点第 0 个 option**（可能不是最优效果）；`announce/counter/sort/sum` 是"安全默认"而非最优。
-8. **线上排位：能完整打完，但胜率依赖策略**：客户端/管线侧已实测可拿房→进房→选卡组→准备→完整对局→自然结算（LP_ZERO 等），并支持受控掉线后约 13s 重连回同房继续打；输局主要是 policy 保守（大量 `decline`/`to_bp`/`end`），不是管线卡死。**排位相关新字段（`/state.deckError`、`/state.isWin/isLoss/isDraw`、`/state.lpOrder`、`/state.pipeline.recentMsgs`、`/state.tpPending`+`/state.tpOptions`、`/actions` 的先/后攻动作 `kind:"tp"`+`index:1|2`、`CHAIN raw` 等）只在客户端 `2026-11-08 03:38:41 / 6,290,944 B` 及之后存在**；旧 exe 请先升级。详见 [`RANKED-REPORT.md`](RANKED-REPORT.md)。
+8. **线上排位：能完整打完，但胜率依赖策略**：客户端/管线侧已实测可拿房→进房→选卡组→准备→完整对局→自然结算（LP_ZERO 等），并支持受控掉线后约 13s 重连回同房继续打；输局主要是 policy 保守（大量 `decline`/`to_bp`/`end`），不是管线卡死。**排位相关新字段（`/state.deckError`、`/state.isWin/isLoss/isDraw`、`/state.lpOrder`、`/state.pipeline.recentMsgs`、`/state.tpPending`+`/state.tpOptions`、`/actions` 的先/后攻动作 `kind:"tp"`+`index:1|2`、`/state.sidePending`、`/actions` 的换备牌动作 `kind:"side_ok"`（Bo3 每局之间，`id=0` → `btnSideOK`/`SendUpdateDeck`）、`CHAIN raw` 等）只在客户端 `2026-11-09 22:51:31 / 6,295,040 B` 及之后存在**；旧 exe 请先升级。详见 [`RANKED-REPORT.md`](RANKED-REPORT.md)。
 
 ---
 

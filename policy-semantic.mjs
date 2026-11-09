@@ -169,6 +169,7 @@ const S = {
   autos: 0,            // `auto` safe-default actions actually sent (whitelisted msgs only)
   autoBlocked: 0,      // `auto`-only prompts on unknown msgs that we refused to answer
   tpPicks: 0,          // first/second-turn (tp) choices sent to the kernel
+  sideOk: 0,           // Bo3 side-deck confirms ("keep side deck (no changes) and continue")
   notAwaitingSkips: 0, // /actions results with awaiting=false that we refused to act on
   chainsTaken: 0,
   chainsDeclined: 0,
@@ -196,7 +197,7 @@ function printStats(reason) {
   log(`stats reason=${reason} uptime=${uptime()}s acted=${S.acted} skippedStale=${S.skippedStale}` +
     ` escalations=${S.escalations} heartbeats=${S.heartbeats} stalls=${S.stalls} emptyBursts=${S.emptyBursts}` +
     ` trapsActivated=${S.trapsActivated} trapsSet=${S.trapsSet} chainsTaken=${S.chainsTaken} chainsDeclined=${S.chainsDeclined}` +
-    ` autos=${S.autos} autoBlocked=${S.autoBlocked} notAwaiting=${S.notAwaitingSkips} tpPicks=${S.tpPicks}` +
+    ` autos=${S.autos} autoBlocked=${S.autoBlocked} notAwaiting=${S.notAwaitingSkips} tpPicks=${S.tpPicks} sideOk=${S.sideOk}` +
     ` win=${S.win === null ? 'unknown' : S.win} result=${S.result ?? 'unknown'}` +
     `${S.winReason ? '(' + S.winReason + ')' : ''}` +
     ` actErrors=${S.actErrors} actRetries=${S.actRetries} httpErrors=${S.httpErrors} loops=${S.loops}` +
@@ -515,6 +516,8 @@ function noteActionStats(act) {
     if (act.kind === 'set_spell') S.trapsSet++;   // a face-down spell/trap (goal trap or generic)
   } else if (act.kind === 'tp') {
     S.tpPicks++;                                  // first/second-turn choice sent to the kernel
+  } else if (act.kind === 'side_ok') {
+    S.sideOk++;                                   // Bo3 side-deck confirm ("keep side deck and continue")
   }
 }
 
@@ -677,6 +680,16 @@ function choose(actions) {
     // /act_id takes the action id (client: id 0 = first, id 1 = second); the index is the semantic value.
     log(`TP-PICK ${tp.pref} (index=${tp.index}) id=${tp.act.id} [TP_PREF=${CFG.tpPref}]`);
     return tp.act;
+  }
+
+  // ---- 0b) Bo3 side deck (game 2/3): just keep the side deck unchanged and continue.
+  //          Lowest-risk choice (no deck edits => no illegal-deck / no missing cards), and it is what
+  //          the runner expects when it waits for the next game instead of killing the policy.
+  //          TP wins over this when both are offered (it happens before the duel starts).
+  const sideOk = byKind('side_ok');
+  if (sideOk.length) {
+    log('SIDE-OK keep side deck');
+    return sideOk[0];
   }
 
   // Trap opportunities are computed up-front: MISSION has to yield to them (otherwise it would
@@ -952,6 +965,7 @@ function heartbeatIfDue(stateForHb) {
     : 'isWin=unknown raw=? local=?';
   log(`hb acted=${S.acted} seq=${S.since} curMsg=${S.lastCurMsg} awaiting=${S.lastAwaiting} win=${winText}` +
     ` stale=${S.skippedStale} actErr=${S.actErrors} esc=${S.escalations} stalls=${S.stalls} hb=${S.heartbeats}` +
+    ` tpPicks=${S.tpPicks} sideOk=${S.sideOk}` +
     // trap counters are repeated here on purpose: a killed bot (Stop-Process on Windows) never
     // prints the final `stats` line, so the last heartbeat is the only survivable evidence.
     ` trapsSet=${S.trapsSet} trapsAct=${S.trapsActivated} chains=${S.chainsTaken}/${S.chainsDeclined}` +

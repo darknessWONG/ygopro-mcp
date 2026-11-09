@@ -31,9 +31,10 @@ async function authUser(token) {
   const r = await fetch('https://sapi.moecube.com:444/accounts/authUser', { headers: { authorization: 'Bearer ' + token }, signal: AbortSignal.timeout(15000) });
   return { status: r.status, json: await r.json().catch(() => null) };
 }
-async function match(name, secret) {
+async function match(name, secret, leave) {
   const basic = Buffer.from(`${name}:${secret}`).toString('base64');
-  const r = await fetch('https://sapi.moecube.com:444/ygopro/match?arena=athletic&locale=zh-CN', {
+  const url = 'https://sapi.moecube.com:444/ygopro/match?arena=athletic&locale=zh-CN' + (leave ? '&leave=1' : '');
+  const r = await fetch(url, {
     method: 'POST', headers: { authorization: 'Basic ' + basic }, signal: AbortSignal.timeout(20000),
   });
   return { status: r.status, json: await r.json().catch(() => null) };
@@ -54,7 +55,12 @@ async function match(name, secret) {
   if (!user) throw new Error('no valid token in ranked/ls-copy');
   if (wantId && Number(user.id) !== wantId) throw new Error(`authUser id ${user.id} != pinned ${wantId}`);
   if (!user.u16Secret) throw new Error('authUser has no u16Secret');
-  const m = await match(user.name ?? user.username, user.u16Secret);
+  let m = await match(user.name ?? user.username, user.u16Secret);
+  if (m.status === 409) {
+    // 409 = still queued/in a previous room; the leave=1 variant leaves it and queues again.
+    process.stderr.write('[get-room] match returned 409, retrying with leave=1\n');
+    m = await match(user.name ?? user.username, user.u16Secret, true);
+  }
   if (!m.json?.password) throw new Error('match failed: ' + JSON.stringify(m));
   const out = { address: m.json.address, port: m.json.port, password: m.json.password, name: user.name ?? user.username, id: user.id };
   // a re-queued match can hand back the SAME (already dead) room password; flag it so callers can wait for a fresh one
