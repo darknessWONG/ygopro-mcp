@@ -1,13 +1,13 @@
 # ygopro-mcp
 
-把 **YGOPro 客户端**接到 **MCP（Model Context Protocol）**：LLM / agent 通过 14 个 MCP 工具，
+把 **YGOPro 客户端**接到 **MCP（Model Context Protocol）**：LLM / agent 通过 16 个 MCP 工具，
 用「语义动作」打牌——不用拼 CTOS/STOC 二进制帧，也不需要用像素点屏幕。
 
 ```
    LLM / agent（MCP 宿主）
         │  MCP over stdio (JSON-RPC)
         ▼
-   bridge/mcp-server.mjs        薄桥：14 个工具 → HTTP
+   bridge/mcp-server.mjs        薄桥：16 个工具 → HTTP
         │  HTTP 127.0.0.1:7788（房主）/ 7789（客机）
         ▼
    带控制层的 YGOPro 客户端      进程内 HTTP server + 动作编码 + UI 注入
@@ -27,7 +27,7 @@
 
 | 需要 | 说明 |
 |---|---|
-| **带控制层的 YGOPro 客户端** | 本仓库**不包含**客户端二进制。控制层是客户端源码里的扩展（`gframe/control*.cpp`，HTTP 端点 `/state` `/prompt` `/wait_prompt` `/actions` `/act_id` `/net` `/ui` 等）。<br>**已测试构建**：`YGOPro.exe` **`2026-11-10 00:07:02` / `6,295,040 B`**<br>SHA256：`05E86D34506DBABBF307D972A0BFA184CE05EFEE98442C7F482690DD25C4A10D`<br>核对：`node doctor.mjs --client <exe>`（默认比 size；加 `--strict-build` 同时比 sha256 —— 用于区分"同 size 不同 build"）。<br>构建：用带控制层补丁的 YGOPro 源码（MyCard 客户端 fork）自行编译，产物放到例如 `mycard-client/bin/release/x64/YGOPro.exe`。 |
+| **带控制层的 YGOPro 客户端** | 本仓库**不包含**客户端二进制。控制层是客户端源码里的扩展（`gframe/control*.cpp`，HTTP 端点 `/state` `/prompt` `/wait_prompt` `/actions` `/act_id` `/net` `/ui` 等）。<br>**已测试构建**：`YGOPro.exe` **`2026-11-10 08:12:43` / `6,309,888 B`**<br>SHA256：`12F43B26DE4967D56B2C05FA4A0D49594BCFC577DD94029EDD6A95344F1390EA`<br>核对：`node doctor.mjs --client <exe>`（默认比 size；加 `--strict-build` 同时比 sha256 —— 用于区分"同 size 不同 build"）。<br>构建：用带控制层补丁的 YGOPro 源码（MyCard 客户端 fork）自行编译，产物放到例如 `mycard-client/bin/release/x64/YGOPro.exe`。 |
 | **Node.js ≥ 18** | 只用内置模块（`fetch`/`http`/`child_process`），**零 npm 依赖**。 |
 | （可选）卡组 `.ydk` | 客户端自己的 `deck/` 目录；控制层用 `POST /deck?name=Blackwing` 预载。本仓库不含卡图/卡表。 |
 
@@ -94,7 +94,7 @@ node doctor.mjs --client "C:\path\to\YGOPro.exe" --strict-build   # 发布自检
 
 | 路径 | 类别 | 作用 |
 |---|---|---|
-| `mcp-server.mjs` | runtime | MCP stdio server，14 个工具 → HTTP |
+| `mcp-server.mjs` | runtime | MCP stdio server，16 个工具 → HTTP |
 | `policy-semantic.mjs` | runtime | 参考策略（语义决策循环；可当 LLM 的替身） |
 | `supervisor.mjs` | runtime | 常驻监护：读 `/net` 判掉线；`--profile lan` 只记账，`--profile ranked` 重启客户端并重连+验证 |
 | `doctor.mjs` | ops | 自检（本文件） |
@@ -141,7 +141,7 @@ node doctor.mjs --client "C:\path\to\YGOPro.exe" --strict-build   # 发布自检
 
 | 文档 | 内容 |
 |---|---|
-| [`docs/MCP-INTERFACE.md`](docs/MCP-INTERFACE.md) | **接口规范（权威）**：14 个工具、所有 HTTP 端点、`/state`/`/prompt`/`/ui` 字段、`/actions` kind 全表、连锁语义、UI 注入设计、运行开关、排障 |
+| [`docs/MCP-INTERFACE.md`](docs/MCP-INTERFACE.md) | **接口规范（权威）**：16 个工具、所有 HTTP 端点、`/state`/`/prompt`/`/ui` 字段、`/actions` kind 全表、连锁语义、UI 注入设计、运行开关、排障 |
 | [`docs/RECONNECT-DESIGN.md`](docs/RECONNECT-DESIGN.md) | 掉线/重连设计：`/net` 状态机、supervisor 职责、journal（`resume-context-<port>.json`）、探活参数 |
 | [`docs/supervisor.md`](docs/supervisor.md) | supervisor 用法、状态机、JSONL 字段 |
 | [`docs/direct-actions.md`](docs/direct-actions.md) | 哪些动作走 UI、哪些走直连、对 LLM 的影响、改进路线 |

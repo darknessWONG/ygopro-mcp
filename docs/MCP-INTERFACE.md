@@ -3,8 +3,8 @@
 > **读者**：后续接手的 LLM / agent / 工程师。**只读本文档 + 附录即可接入**，不需要先读懂 ygopro 协议。
 >
 > **适用版本（当前正式版 exe）**：`mycard-client/bin/release/x64/YGOPro.exe`
-> = **2026-11-10 00:07:02 / 6,295,040 B**，SHA256 `05E86D34506DBABBF307D972A0BFA184CE05EFEE98442C7F482690DD25C4A10D`
-> （Bo3 换备牌 + 回放框跳过 + Game2/3 结果重置版；验收/历史版本见文末记录）
+> = **2026-11-10 08:12:43 / 6,309,888 B**，SHA256 `12F43B26DE4967D56B2C05FA4A0D49594BCFC577DD94029EDD6A95344F1390EA`
+> （Bo3 换备可操作（`/state.side` + `POST /side_swap` + `side_ok` 竞态修复）+ 回放框跳过 + Game2/3 结果重置版；验收/历史版本见文末记录）
 > `/state.resume.reason` 在加载成功时返回 `"loaded"`，行为不变；22:23:28 已做过冒烟）。
 > 该版含重连基础能力：`GET /net`、自动 `/tip` 探活、`YGO_SUPPRESS_MODALS` 模态框抑制、
 > `resume-context-<port>.json` journal、`POST /leave`（详见 [RECONNECT-DESIGN.md](RECONNECT-DESIGN.md)、[reconnect-lab.md](reconnect-lab.md)）。
@@ -53,7 +53,7 @@
         └───────────┬────────────┘
                     │ MCP (stdio, JSON-RPC)
         ┌───────────▼────────────┐
-        │ bridge/mcp-server.mjs  │   薄桥：14 个工具 → HTTP
+        │ bridge/mcp-server.mjs  │   薄桥：16 个工具 → HTTP
         └───────────┬────────────┘
                     │ HTTP 127.0.0.1:7788（房主）/ 7789（客人）
         ┌───────────▼───────────────────────────────────────┐
@@ -102,7 +102,7 @@
 
 ---
 
-## 2. MCP 工具清单（`bridge/mcp-server.mjs` 的 14 个工具）
+## 2. MCP 工具清单（`bridge/mcp-server.mjs` 的 16 个工具）
 
 > 全部无参数或只有简单参数；返回体就是对应 HTTP 端点的 JSON（原文透传，见 §4）。
 
@@ -122,6 +122,8 @@
 | 12 | `control_chat` | 服务器聊天/系统消息（房间被拒原因） | — | `GET /chat` |
 | 13 | `control_surrender` | 投降 | — | `POST /surrender` |
 | 14 | `control_msg` | 最近一条原始服务器消息（调试） | — | `GET /msg` |
+| 15 | `control_side_move` | **Bo3 换备**：把 N 张卡在 side/main/extra 之间移动（详见 §5.5） | `code`(number，卡号)、`from`(side\|main\|extra)、`to`(main\|extra\|side)、`n`(默认 1) | `POST /side_swap?code&from&to&n` |
+| 16 | `control_side_done` | **Bo3 换备**：换完牌点"确定"继续下一局（等价 `btnSideOK`） | — | 先 `GET /actions` 找 `kind=side_ok` 的 id，再 `GET /act_id?id=` |
 
 **MCP 连接示例（JSON-RPC over stdio）**
 
@@ -416,6 +418,73 @@ body = PromptJson(g_shared);
 - `kind` 是稳定语义；策略只判断 `kind` + `label`/卡号即可。
 - `place` 的 `ctrl`/`loc`/`seq` 是客户端已按"本地半区"规则修正过的值；遇到 `MSG_RETRY` 客户端会自动换变体重试（`placeVariant`）。
 - `MSG_SELECT_CHAIN` 的 `chain`/`decline` 与 §6 的 `chainCandidates[].index` **一一对应**。
+
+---
+
+### 5.5 Bo3 换备（side decking：`/state.side` + `/side_swap`）
+
+Bo3 每两局之间，客户端进入换备牌阶段。**控制驱动模式下客户端不会自动点"确定"**，而是把状态暴露出来，
+由 LLM 决定怎么换（也可以一张都不换，直接继续）。
+
+**`/state.side`（换备阶段才有意义）**
+
+```json
+{"available":true,"pending":true,"waiting":false,"elapsedMs":0,"waitingSeen":false,"lastWaitMs":0,
+ "main":[{"code":53582587,"name":"激流葬","count":2}],
+ "extra":[], "side":[{"code":84749824,"name":"神之警告","count":1}],
+ "counts":{"main":40,"extra":15,"side":15},
+ "pre":{"main":40,"extra":15,"side":15},
+ "limits":{"mainMin":40,"mainMax":40,"extraMax":15,"sideMax":15},
+ "error":null,
+ "note":"side decking: move cards with side_swap, then side_ok"}
+```
+
+| 字段 | 含义 |
+|---|---|
+| `available` | 客户端支持换备接口（新构建为 `true`；旧构建无此对象） |
+| `pending` | `true` = 轮到我换备（此时 `/actions` 里有 `kind:"side_ok"`） |
+| `waiting` | `true` = 我已确定、正在等对手换备（`pending=false`，客户端**不会退出**）。**瞬时值**：LAN 实测窗口 0–16ms（自己确认后同 tick 就收到下一局 `DUEL_START`），200ms 采样常常抓不到 |
+| `waitingSeen` / `lastWaitMs` | **sticky**：本次换备是否等过对手 / 上次等待时长（保留到下次 `STOC_CHANGE_SIDE`）。**断言优先用这两个**（`waiting` 抓不到不代表没等过） |
+| `elapsedMs` | 正在 waiting 时已等待毫秒（不在 waiting 时为 0） |
+| `main`/`extra`/`side` | 各池的卡（`code`/`name`/`count`），只能看到自己的 |
+| `counts` | 当前张数 `{main,extra,side}` |
+| `pre` | 进入换备前的张数（用于对比 "换了几张"） |
+| `limits` | `{mainMin,mainMax,extraMax,sideMax}`：卡组下限/上限、额外上限、备牌上限 |
+| `error` | 最近一次 `side_ok` 的校验错误（如 `counts must match`），成功为 `null` |
+| `note` | 给 LLM 的可读提示 |
+
+`/prompt` 同时带：`sidePending`、`sideSummary`（一行摘要）、`sideChooseBy`（如 `"act_id kind=side_ok id=0"`）、`sideError`。
+
+**`POST /side_swap?code=<卡号>&from=side|main|extra&to=main|extra|side&n=1`**
+移动 N 张同卡号：
+- 成功：`{"ok":true,"queued":true,"main":<m>,"extra":<e>,"side":<s>}`（**预测值**；可再读 `/state.side.counts` 确认）
+- 失败：`{"ok":false,"error":"<可读原因>"}`，例如 `not enough copies in side (have 1, need 2)`、`from/to must be main|extra|side`
+- 客户端日志：`SIDE swap code=.. from=.. to=.. n=.. -> counts m/e/s=..`
+- 允许方向：`side→main`、`side→extra`、`main→side`、`extra→side`；**只在 `side.pending` 时有效**
+
+**`side_ok`（= MCP `control_side_done()`，等价点 `btnSideOK`）**
+- **拒绝可靠**（不会误点）：
+  - counts 与 `pre` 不一致 → `{"ok":false,"error":"counts must match","sideError":"counts must match"}`，日志 `SIDE ok rejected reason=counts must match` / `(exec-time)`
+  - swap 还没在 UI 线程落地 → `{"ok":false,"error":"side swap pending, retry"}`；side prompt 尚未发布且没有 pending → `{"ok":false,"error":"side prompt not published yet, retry"}`
+  - 收到 `retry` 类错误：等 100–300ms 重试（先读 `/state.side.counts` 确认已生效）
+- 合法：`{"ok":true,"queued":true,"kind":"side_ok"}` → 点 `btnSideOK` → `SendUpdateDeck`，日志 `SIDE ok clicked (from control)`，随后进入下一局（会再走 `DUEL_START reset result state` + TP）
+- 建议顺序：**swap 后先读 `/state.side.counts` 与目标一致，再 `side_ok`**（避免刚 swap 就 done）
+
+**推荐顺序（LLM 侧）**
+
+1. `control_state()` → 看 `side.pending`；不是换备阶段就照常打牌；
+2. 需要换牌：反复 `control_side_move({code, from, to, n})`（对照 `side.counts` + `side.limits`，先换出再换入）；
+   **每次成功后可再 `control_state()` 一次**确认 `side.counts`；
+3. 换完（或决定不换）：`control_side_done()`（= `side_ok`）→ 客户端校验 `SendUpdateDeck`，进入下一局；
+   若返回 `counts must match` → 按 `side.counts/limits` 调整后再 done；
+4. 若 `side.waiting=true`：**等对手**（可能很慢，日志每 10s 打 `SIDE waiting for opponent (elapsed=..ms)`）。
+   这**不是失败**，不要重复调 `control_side_done()`；期间用 `/net` 判链路：`alive=false` 或
+   `sinceLastStoc` 长时间增长 → 按重连流程处理（见 [`RECONNECT-DESIGN.md`](RECONNECT-DESIGN.md)）。
+   注意 `waiting` 是**瞬时值**（LAN 常为 0–16ms），事后判断用 **`waitingSeen` / `lastWaitMs`**；
+5. 参考策略 `policy-semantic.mjs` 在换备阶段会**直接选 `side_ok`（不换备）**；LLM 要真换牌就用上面两个工具，
+   不要同时跑参考策略（避免抢动作）。
+
+> `/side_swap` 在非换备阶段会返回错误；`side_ok` 校验失败只改 `side.error`，不会让客户端退出。
 
 ---
 
@@ -715,7 +784,7 @@ $env:YGO_UI_ACTIONS='0'; powershell ... bridge\lan-run.ps1 -Games 1
 5. **链字段有 1 帧延迟**：`/state` 与 `/prompt` 的链字段来自 UI 线程快照；`chainStack[].forced` 恒 false、`type` 固定 `effect`。
 6. **UI 模式个别动作有 600ms 校验延迟**（点不中时才会走满）。
 7. **多效果卡默认点第 0 个 option**（可能不是最优效果）；`announce/counter/sort/sum` 是"安全默认"而非最优。
-8. **线上排位：能完整打完，但胜率依赖策略**：客户端/管线侧已实测可拿房→进房→选卡组→准备→完整对局→自然结算（LP_ZERO 等），并支持受控掉线后约 13s 重连回同房继续打；输局主要是 policy 保守（大量 `decline`/`to_bp`/`end`），不是管线卡死。**排位相关新字段（`/state.deckError`、`/state.isWin/isLoss/isDraw`、`/state.lpOrder`、`/state.pipeline.recentMsgs`、`/state.tpPending`+`/state.tpOptions`、`/actions` 的先/后攻动作 `kind:"tp"`+`index:1|2`、`/state.sidePending`、`/actions` 的换备牌动作 `kind:"side_ok"`（Bo3 每局之间，`id=0` → `btnSideOK`/`SendUpdateDeck`）、`CHAIN raw` 等；Bo3 Game2/3 开局客户端会 `DUEL_START reset result state` 重置 `winPlayer/winReason`）只在客户端 `2026-11-10 00:07:02 / 6,295,040 B`（sha256 `05E86D34506DBABBF307D972A0BFA184CE05EFEE98442C7F482690DD25C4A10D`）及之后存在**；旧 exe 请先升级。详见 [`RANKED-REPORT.md`](RANKED-REPORT.md)。
+8. **线上排位：能完整打完，但胜率依赖策略**：客户端/管线侧已实测可拿房→进房→选卡组→准备→完整对局→自然结算（LP_ZERO 等），并支持受控掉线后约 13s 重连回同房继续打；输局主要是 policy 保守（大量 `decline`/`to_bp`/`end`），不是管线卡死。**排位相关新字段（`/state.deckError`、`/state.isWin/isLoss/isDraw`、`/state.lpOrder`、`/state.pipeline.recentMsgs`、`/state.tpPending`+`/state.tpOptions`、`/actions` 的先/后攻动作 `kind:"tp"`+`index:1|2`、`/state.sidePending`、`/actions` 的换备牌动作 `kind:"side_ok"`（Bo3 每局之间，`id=0` → `btnSideOK`/`SendUpdateDeck`）、**`/state.side`（`available/pending/waiting/elapsedMs/waitingSeen/lastWaitMs/main/extra/side/counts/pre/limits/error`）+ `POST /side_swap`（真正换牌）+ `side_ok` 竞态修复**、`CHAIN raw` 等；Bo3 Game2/3 开局客户端会 `DUEL_START reset result state` 重置 `winPlayer/winReason`）只在客户端 `2026-11-10 08:12:43 / 6,309,888 B`（sha256 `12F43B26DE4967D56B2C05FA4A0D49594BCFC577DD94029EDD6A95344F1390EA`）及之后存在**；旧 exe 请先升级。详见 [`RANKED-REPORT.md`](RANKED-REPORT.md)。
 
 ---
 

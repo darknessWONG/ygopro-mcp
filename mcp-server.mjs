@@ -1,18 +1,28 @@
 #!/usr/bin/env node
 // bridge/mcp-server.mjs - MCP (stdio) server exposing the instrumented client's control API.
 //
-// Tools:
+// Tools (16):
 //   control_state        -> GET  /state
 //   control_wait_prompt  -> GET  /wait_prompt?since&timeout_ms   (long poll, the main loop primitive)
+//   control_actions      -> GET  /actions
+//   control_act_id       -> GET  /act_id?id=N
 //   control_act          -> POST /act?seq&i|hex
 //   control_ready        -> POST /ready
+//   control_lobby        -> GET  /lobby
+//   control_deck         -> POST /deck?name=
+//   control_start        -> POST /start
+//   control_surrender    -> POST /surrender
+//   control_chat         -> GET  /chat
 //   control_join         -> POST /join?ip&port&pass
 //   control_msg          -> GET  /msg
 //   control_health       -> GET  /health
+//   control_side_move    -> POST /side_swap?code&from&to&n     (Bo3 side decking)
+//   control_side_done    -> GET  /actions then /act_id (kind=side_ok)  (confirm side deck, Bo3)
 //
 // Run:  node bridge/mcp-server.mjs        (env CONTROL_URL=http://127.0.0.1:7788)
 // Wire it into an MCP host with command "node", args ["bridge/mcp-server.mjs"].
 import readline from 'node:readline';
+import { pathToFileURL } from 'node:url';
 
 const BASE = process.env.CONTROL_URL || 'http://127.0.0.1:7788';
 const PROTOCOL = '2024-11-05';
@@ -121,6 +131,38 @@ const TOOLS = [
     description: 'Health check of the control layer.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
+  {
+    name: 'control_side_move',
+    description:
+      'Bo3 side decking: move N copies of one card between pools while the side phase is pending ' +
+      '(POST /side_swap?code&from&to&n). Only valid between duels of a match (check control_state().side.pending first). ' +
+      'Allowed directions: side->main, side->extra, main->side, extra->side. ' +
+      'Returns the client response: ok:true with predicted {"main","extra","side"} counts, or ok:false with a ' +
+      'readable error (e.g. "not enough copies in side (have 1, need 2)"). After a successful move, call ' +
+      'control_state() again to read side.counts. Use at most the limits (side.limits).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        code: { type: 'number', description: 'card passcode (e.g. 53582587)' },
+        from: { type: 'string', enum: ['side', 'main', 'extra'], description: 'source pool' },
+        to: { type: 'string', enum: ['main', 'extra', 'side'], description: 'destination pool' },
+        n: { type: 'number', description: 'how many copies to move (default 1)' },
+      },
+      required: ['code', 'from', 'to'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'control_side_done',
+    description:
+      'Bo3 side decking: finish side decking and continue to the next duel. Finds the pending ' +
+      'kind="side_ok" action in control_actions() and submits it (i.e. /act_id?id=0, same as clicking "OK"; ' +
+      'the client validates the counts/deck). Call this after control_side_move calls. ' +
+      'Returns {ok, id, action, result}; when the counts are illegal the client answers ' +
+      '{ok:false, error:"counts must match", sideError:"counts must match"}. If side.waiting=true (waiting for the ' +
+      'opponent) do NOT treat it as a failure - just wait (use /net to detect a dead link).',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
 ];
 
 async function callTool(name, args) {
@@ -148,11 +190,47 @@ async function callTool(name, args) {
       if (args?.i !== undefined) q.i = args.i;
       return http('/act?' + qs(q), 'POST');
     }
+    case 'control_side_move': {
+      const code = Number(args?.code);
+      if (!Number.isFinite(code) || code <= 0) throw new Error('control_side_move: "code" (card passcode, number) is required');
+      const from = String(args?.from ?? '');
+      const to = String(args?.to ?? '');
+      const allowed = { side: ['main', 'extra'], main: ['side'], extra: ['side'] };
+      if (!allowed[from] || !allowed[from].includes(to)) {
+        throw new Error(`control_side_move: invalid from/to (${from || '?'} -> ${to || '?'}); allowed: side->main, side->extra, main->side, extra->side`);
+      }
+      const n = Math.max(1, Math.trunc(Number(args?.n ?? 1)) || 1);
+      // client contract: POST /side_swap?code&from&to&n
+      //   ok:    {"ok":true,"queued":true,"main":<m>,"extra":<e>,"side":<s>}   (predicted counts)
+      //   error: {"ok":false,"error":"not enough copies in side (have 1, need 2)" | "from/to must be main|extra|side"}
+      return http('/side_swap?' + qs({ code, from, to, n }), 'POST');
+    }
+    case 'control_side_done': {
+      const acts = await http('/actions');
+      const list = (acts && Array.isArray(acts.actions)) ? acts.actions : [];
+      const side = list.find((a) => a && a.kind === 'side_ok');
+      if (!side) {
+        return {
+          ok: false,
+          error: 'no side_ok action: not in the Bo3 side phase (or this client build has no side-deck support)',
+          awaiting: acts?.awaiting ?? null,
+          sidePending: acts?.sidePending ?? null,
+          actions: list.map((a) => ({ id: a.id, kind: a.kind })),
+        };
+      }
+      const r = await http('/act_id?id=' + encodeURIComponent(side.id));
+      return { ok: !!(r && r.ok !== false), id: side.id, action: side, result: r };
+    }
     default:
       throw new Error('unknown tool: ' + name);
   }
 }
 
+const isMain = (() => {
+  try { return !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href; } catch { return false; }
+})();
+
+if (isMain) {
 const rl = readline.createInterface({ input: process.stdin });
 const send = (obj) => process.stdout.write(JSON.stringify(obj) + '\n');
 const reply = (id, result) => send({ jsonrpc: '2.0', id, result });
@@ -196,3 +274,7 @@ rl.on('line', async (line) => {
     fail(id, -32603, String(e && e.message ? e.message : e));
   }
 });
+} // if (isMain)
+
+// exported for tests / embedding (running this file directly still starts the stdio server)
+export { TOOLS, callTool, http, qs, BASE, PROTOCOL };
