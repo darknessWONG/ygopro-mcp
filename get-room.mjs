@@ -33,9 +33,9 @@ async function authUser(token) {
 }
 async function match(name, secret, leave) {
   const basic = Buffer.from(`${name}:${secret}`).toString('base64');
-  const url = 'https://sapi.moecube.com:444/ygopro/match?arena=athletic&locale=zh-CN' + (leave ? '&leave=1' : '');
+  const url = 'https://sapi.moecube.com:444/ygopro/match?arena=athletic&locale=zh-CN' + (leave ? '&cancel=1' : '');
   const r = await fetch(url, {
-    method: 'POST', headers: { authorization: 'Basic ' + basic }, signal: AbortSignal.timeout(20000),
+    method: 'POST', headers: { authorization: 'Basic ' + basic }, signal: AbortSignal.timeout(60000),
   });
   return { status: r.status, json: await r.json().catch(() => null) };
 }
@@ -56,10 +56,14 @@ async function match(name, secret, leave) {
   if (wantId && Number(user.id) !== wantId) throw new Error(`authUser id ${user.id} != pinned ${wantId}`);
   if (!user.u16Secret) throw new Error('authUser has no u16Secret');
   let m = await match(user.name ?? user.username, user.u16Secret);
-  if (m.status === 409) {
-    // 409 = still queued/in a previous room; the leave=1 variant leaves it and queues again.
-    process.stderr.write('[get-room] match returned 409, retrying with leave=1\n');
-    m = await match(user.name ?? user.username, user.u16Secret, true);
+  if (m.status === 409 || !m.json?.password) {
+    // 409 / empty answer = still queued or sitting in a previous room. The leave=1
+    // variant leaves it and queues again; give the server a few tries, it can be slow.
+    for (let t = 1; t <= 4 && (m.status === 409 || !m.json?.password); t++) {
+      process.stderr.write(`[get-room] match status=${m.status}, retry with leave=1 (${t}/4)\n`);
+      await new Promise((r) => setTimeout(r, 5000));
+      m = await match(user.name ?? user.username, user.u16Secret, true);
+    }
   }
   if (!m.json?.password) throw new Error('match failed: ' + JSON.stringify(m));
   const out = { address: m.json.address, port: m.json.port, password: m.json.password, name: user.name ?? user.username, id: user.id };

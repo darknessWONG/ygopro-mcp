@@ -3,8 +3,8 @@
 > **读者**：后续接手的 LLM / agent / 工程师。**只读本文档 + 附录即可接入**，不需要先读懂 ygopro 协议。
 >
 > **适用版本（当前正式版 exe）**：`mycard-client/bin/release/x64/YGOPro.exe`
-> = **2026-11-10 08:12:43 / 6,309,888 B**，SHA256 `12F43B26DE4967D56B2C05FA4A0D49594BCFC577DD94029EDD6A95344F1390EA`
-> （Bo3 换备可操作（`/state.side` + `POST /side_swap` + `side_ok` 竞态修复）+ 回放框跳过 + Game2/3 结果重置版；验收/历史版本见文末记录）
+> = **2026-11-11 13:14:33 / 6,312,448 B**，SHA256 `60D07673F3D968CC28ADC2B89BB9C77278A0E10CC8A8C2862E12C8D0F359141E`
+> （3×Bo3 连续完成验收版：Bo3 换备可操作（`/state.side` + `POST /side_swap` + `side_ok` 竞态修复）+ 被动判死诊断 + 回放框跳过 + Game2/3 结果重置；验收/历史版本见文末记录）
 > `/state.resume.reason` 在加载成功时返回 `"loaded"`，行为不变；22:23:28 已做过冒烟）。
 > 该版含重连基础能力：`GET /net`、自动 `/tip` 探活、`YGO_SUPPRESS_MODALS` 模态框抑制、
 > `resume-context-<port>.json` journal、`POST /leave`（详见 [RECONNECT-DESIGN.md](RECONNECT-DESIGN.md)、[reconnect-lab.md](reconnect-lab.md)）。
@@ -444,7 +444,7 @@ Bo3 每两局之间，客户端进入换备牌阶段。**控制驱动模式下�
 | `available` | 客户端支持换备接口（新构建为 `true`；旧构建无此对象） |
 | `pending` | `true` = 轮到我换备（此时 `/actions` 里有 `kind:"side_ok"`） |
 | `waiting` | `true` = 我已确定、正在等对手换备（`pending=false`，客户端**不会退出**）。**瞬时值**：LAN 实测窗口 0–16ms（自己确认后同 tick 就收到下一局 `DUEL_START`），200ms 采样常常抓不到 |
-| `waitingSeen` / `lastWaitMs` | **sticky**：本次换备是否等过对手 / 上次等待时长（保留到下次 `STOC_CHANGE_SIDE`）。**断言优先用这两个**（`waiting` 抓不到不代表没等过） |
+| `waitingSeen` / `lastWaitMs` | **sticky**：本次换备是否等过对手 / 上次等待时长（保留到下次 `STOC_CHANGE_SIDE`）。**断言优先用这两个**（`waiting` 抓不到不代表没等过）。`lastWaitMs=0` = 自己是**最后确认**的一方（等 0ms，正常；对方先确认时才 >0） |
 | `elapsedMs` | 正在 waiting 时已等待毫秒（不在 waiting 时为 0） |
 | `main`/`extra`/`side` | 各池的卡（`code`/`name`/`count`），只能看到自己的 |
 | `counts` | 当前张数 `{main,extra,side}` |
@@ -460,7 +460,7 @@ Bo3 每两局之间，客户端进入换备牌阶段。**控制驱动模式下�
 - 成功：`{"ok":true,"queued":true,"main":<m>,"extra":<e>,"side":<s>}`（**预测值**；可再读 `/state.side.counts` 确认）
 - 失败：`{"ok":false,"error":"<可读原因>"}`，例如 `not enough copies in side (have 1, need 2)`、`from/to must be main|extra|side`
 - 客户端日志：`SIDE swap code=.. from=.. to=.. n=.. -> counts m/e/s=..`
-- 允许方向：`side→main`、`side→extra`、`main→side`、`extra→side`；**只在 `side.pending` 时有效**
+- 允许方向（**双向**）：`side→main`、`side→extra`、`main→side`、`extra→side`；**只在 `side.pending` 时有效**
 
 **`side_ok`（= MCP `control_side_done()`，等价点 `btnSideOK`）**
 - **拒绝可靠**（不会误点）：
@@ -784,7 +784,8 @@ $env:YGO_UI_ACTIONS='0'; powershell ... bridge\lan-run.ps1 -Games 1
 5. **链字段有 1 帧延迟**：`/state` 与 `/prompt` 的链字段来自 UI 线程快照；`chainStack[].forced` 恒 false、`type` 固定 `effect`。
 6. **UI 模式个别动作有 600ms 校验延迟**（点不中时才会走满）。
 7. **多效果卡默认点第 0 个 option**（可能不是最优效果）；`announce/counter/sort/sum` 是"安全默认"而非最优。
-8. **线上排位：能完整打完，但胜率依赖策略**：客户端/管线侧已实测可拿房→进房→选卡组→准备→完整对局→自然结算（LP_ZERO 等），并支持受控掉线后约 13s 重连回同房继续打；输局主要是 policy 保守（大量 `decline`/`to_bp`/`end`），不是管线卡死。**排位相关新字段（`/state.deckError`、`/state.isWin/isLoss/isDraw`、`/state.lpOrder`、`/state.pipeline.recentMsgs`、`/state.tpPending`+`/state.tpOptions`、`/actions` 的先/后攻动作 `kind:"tp"`+`index:1|2`、`/state.sidePending`、`/actions` 的换备牌动作 `kind:"side_ok"`（Bo3 每局之间，`id=0` → `btnSideOK`/`SendUpdateDeck`）、**`/state.side`（`available/pending/waiting/elapsedMs/waitingSeen/lastWaitMs/main/extra/side/counts/pre/limits/error`）+ `POST /side_swap`（真正换牌）+ `side_ok` 竞态修复**、`CHAIN raw` 等；Bo3 Game2/3 开局客户端会 `DUEL_START reset result state` 重置 `winPlayer/winReason`）只在客户端 `2026-11-10 08:12:43 / 6,309,888 B`（sha256 `12F43B26DE4967D56B2C05FA4A0D49594BCFC577DD94029EDD6A95344F1390EA`）及之后存在**；旧 exe 请先升级。详见 [`RANKED-REPORT.md`](RANKED-REPORT.md)。
+8. **线上排位：能完整打完，但胜率依赖策略**：客户端/管线侧已实测可拿房→进房→选卡组→准备→完整对局→自然结算（LP_ZERO 等），并支持受控掉线后约 13s 重连回同房继续打；输局主要是 policy 保守（大量 `decline`/`to_bp`/`end`），不是管线卡死。**排位相关新字段（`/state.deckError`、`/state.isWin/isLoss/isDraw`、`/state.lpOrder`、`/state.pipeline.recentMsgs`、`/state.tpPending`+`/state.tpOptions`、`/actions` 的先/后攻动作 `kind:"tp"`+`index:1|2`、`/state.sidePending`、`/actions` 的换备牌动作 `kind:"side_ok"`（Bo3 每局之间，`id=0` → `btnSideOK`/`SendUpdateDeck`）、**`/state.side`（`available/pending/waiting/elapsedMs/waitingSeen/lastWaitMs/main/extra/side/counts/pre/limits/error`）+ `POST /side_swap`（真正换牌）+ `side_ok` 竞态修复**、`CHAIN raw` 等；Bo3 Game2/3 开局客户端会 `DUEL_START reset result state` 重置 `winPlayer/winReason`）只在客户端 `2026-11-11 13:14:33 / 6,312,448 B`（sha256 `60D07673F3D968CC28ADC2B89BB9C77278A0E10CC8A8C2862E12C8D0F359141E`）及之后存在**；旧 exe 请先升级。详见 [`RANKED-REPORT.md`](RANKED-REPORT.md)。
+9. **被动判死（对手回合 60s eff + `NET silence diag`）**：对手长时间不出手时，客户端会按"对手回合 60s eff"推进判定，并在 `/net` 相关日志打 `NET silence diag`（链路静默诊断，不主动断线）；被动判死不是本仓库 policy 的行为，属客户端/服务端规则。`/net` 的 `alive`/`sinceLastStoc` 在静默期会持续增长——要区分"对手在思考（slow play）"和"对手掉线"，以 `NET silence diag` + `/net.probe` 的 `fails`/`rttMs` 判断；详见 `mycard-client/docs/CONTROL-API.md` 的 `/net` 一节。
 
 ---
 
