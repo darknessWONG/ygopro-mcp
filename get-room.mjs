@@ -31,11 +31,11 @@ async function authUser(token) {
   const r = await fetch('https://sapi.moecube.com:444/accounts/authUser', { headers: { authorization: 'Bearer ' + token }, signal: AbortSignal.timeout(15000) });
   return { status: r.status, json: await r.json().catch(() => null) };
 }
-async function match(name, secret, leave) {
+async function match(name, secret, leave, timeoutMs = 20000) {
   const basic = Buffer.from(`${name}:${secret}`).toString('base64');
   const url = 'https://sapi.moecube.com:444/ygopro/match?arena=athletic&locale=zh-CN' + (leave ? '&cancel=1' : '');
   const r = await fetch(url, {
-    method: 'POST', headers: { authorization: 'Basic ' + basic }, signal: AbortSignal.timeout(60000),
+    method: 'POST', headers: { authorization: 'Basic ' + basic }, signal: AbortSignal.timeout(timeoutMs),
   });
   return { status: r.status, json: await r.json().catch(() => null) };
 }
@@ -62,7 +62,7 @@ async function match(name, secret, leave) {
     for (let t = 1; t <= 4 && (m.status === 409 || !m.json?.password); t++) {
       process.stderr.write(`[get-room] match status=${m.status}, retry with leave=1 (${t}/4)\n`);
       await new Promise((r) => setTimeout(r, 5000));
-      m = await match(user.name ?? user.username, user.u16Secret, true);
+      m = await match(user.name ?? user.username, user.u16Secret, true, 240000);
     }
   }
   if (!m.json?.password) throw new Error('match failed: ' + JSON.stringify(m));

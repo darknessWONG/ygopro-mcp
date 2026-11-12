@@ -177,6 +177,8 @@
 
 ---
 
+> **实战步骤（进房→选卡组→准备→开始→TP→决策→换备→下一局→收尾）见 [`MATCH-PLAYBOOK.md`](MATCH-PLAYBOOK.md)。**
+> 最容易踩的坑：**双方 ready 不会自动开局，必须发 `/start` 并轮到 `state.started==true`**；一局打完要 `side_ok` 才算完成换备；整场以 `STOC_DUEL_END` 判定。
 ## 3. 标准交互循环
 
 ### 3.1 伪代码（推荐实现）

@@ -141,6 +141,7 @@ node doctor.mjs --client "C:\path\to\YGOPro.exe" --strict-build   # 发布自检
 
 | 文档 | 内容 |
 |---|---|
+| [docs/MATCH-PLAYBOOK.md](docs/MATCH-PLAYBOOK.md) | **对局操作手册（给 AI）**：排队/进房/选卡组/准备/**开始**/TP/决策/换备(side_ok)/下一局/收尾 的完整步骤与判定、异常处理 |
 | [`docs/MCP-INTERFACE.md`](docs/MCP-INTERFACE.md) | **接口规范（权威）**：16 个工具、所有 HTTP 端点、`/state`/`/prompt`/`/ui` 字段、`/actions` kind 全表、连锁语义、UI 注入设计、运行开关、排障 |
 | [`docs/RECONNECT-DESIGN.md`](docs/RECONNECT-DESIGN.md) | 掉线/重连设计：`/net` 状态机、supervisor 职责、journal（`resume-context-<port>.json`）、探活参数 |
 | [`docs/supervisor.md`](docs/supervisor.md) | supervisor 用法、状态机、JSONL 字段 |

@@ -9,7 +9,8 @@ param(
   [int]$Id = 1173810,
   [int]$ShotEverySec = 10,
   [int]$StallSec = 75,
-  [int]$MaxTotalMinutes = 90
+  [int]$MaxTotalMinutes = 90,
+  [int]$SilentAbortSec = 150
 )
 $ErrorActionPreference = 'Continue'
 $root = 'D:\dsh_workspaces\MC_bot_dsh'
@@ -93,7 +94,7 @@ while ($successCount -lt $Runs -and (Get-Date) -lt $totalDeadline) {
 
   # 2) queue
   $room = $null
-  for ($q = 1; $q -le 10; $q++) {
+  for ($q = 1; $q -le 60; $q++) {
     $env:MC_ACCOUNT_ID = "$Id"
     $rawFile = Join-Path $evm 'room-raw.txt'
     cmd /c "node `"$root\bridge\get-room.mjs`" > `"$rawFile`" 2>&1"
@@ -153,7 +154,13 @@ while ($successCount -lt $Runs -and (Get-Date) -lt $totalDeadline) {
     if ($playerCount -lt 2) { $emptyTicks++ } else { $emptyTicks = 0 }
     if ($emptyTicks -ge 6) { W ("empty room: only {0} player(s) for {1}s -> leave and re-queue" -f $playerCount, ($emptyTicks*2)); $noOpponent = $true; break }
     if (-not $selfReady -and $readySends -lt 30) { $null = JPost 'http://127.0.0.1:7788/ready'; $readySends++ }
-    if ($readySends -gt 0 -and $playerCount -ge 2 -and $startSends -lt 10 -and ($i % 2) -eq 0) { $null = JPost 'http://127.0.0.1:7788/start'; $startSends++ }
+    # both sides ready does NOT auto-start: keep sending HS_START until /state.started.
+    # (lobby.statuses can lag / miss the opponent, so also trigger on bothReady or our own ready.)
+    $bothReady = ($lb -and $lb.bothReady)
+    if (-not $started -and $readySends -gt 0 -and $startSends -lt 20 -and ($i % 2) -eq 0 -and ($bothReady -or $playerCount -ge 2)) {
+      $null = JPost 'http://127.0.0.1:7788/start'; $startSends++
+      W ("start: HS_START #{0} (bothReady={1} players={2})" -f $startSends, $bothReady, $playerCount)
+    }
     if (($i % 5) -eq 0 -and $lb) { W ("lobby ready={0} self={1} bothReady={2}" -f ($lb.ready -join ','), $lb.self, $lb.bothReady); Set-Content -Path (Join-Path $evm ("lobby-{0}.json" -f $i)) -Value ($lb | ConvertTo-Json -Compress) -Encoding UTF8 }
     if ((Get-Date) -ge $nextShot) { $nextShot = (Get-Date).AddSeconds($ShotEverySec); Shot "m$matchNo-start" }
     if ($s -and $s.started) { $started = $true; break }
@@ -175,7 +182,7 @@ while ($successCount -lt $Runs -and (Get-Date) -lt $totalDeadline) {
     if ((Get-Date) -ge $nextShot) { $nextShot = (Get-Date).AddSeconds($ShotEverySec); Shot "m$matchNo-live" }
     # server goes silent on an opponent that left: timeLeft stops ticking and no STOC arrives.
     # leave the room and take a new match instead of burning the whole budget.
-    if (([int]$s.winPlayer -lt 0) -and -not $awaiting -and -not $s.sidePending -and -not $s.tpPending -and ((Get-Date) - $lastProgress).TotalSeconds -gt 150) {
+    if (([int]$s.winPlayer -lt 0) -and -not $awaiting -and -not $s.sidePending -and -not $s.tpPending -and ((Get-Date) - $lastProgress).TotalSeconds -gt $SilentAbortSec) {
       W ("silent duel for {0}s (turn={1} curMsg={2} timeLeft={3}) -> leave and re-queue" -f [int]((Get-Date) - $lastProgress).TotalSeconds, $s.turn, $s.curMsg, $s.timeLeft)
       Shot "m$matchNo-silent"
       Set-Content -Path (Join-Path $evm 'silent-state.json') -Value (JGet 'http://127.0.0.1:7788/state') -Encoding UTF8
