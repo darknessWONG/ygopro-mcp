@@ -40,7 +40,7 @@ node bridge/get-room.mjs            # MC_ACCOUNT_ID 固定账号；返回 addres
 | 步骤 | 调用 | 判定成功 | 备注 |
 |---|---|---|---|
 | 开始 | `GET /start` | `/state.started==true` | **双方 ready ≠ 开局**。要每 2–3s 发一次、直到 `started=true`（有 host 权限的一方发；排位房一般由服务端/房主推进，但重复发是安全的） |
-| 开局后 | `GET /state` | `started=true`，`turn` 开始增长 | 若 `duel did NOT start` 超时：看 `/lobby.ready`（是否真 ready）、`/lobby.playerCount`（是否只有自己 → 空房，直接离开重排） |
+| 开局后 | `GET /state` | `started=true`，`turn` 开始增长 | 若 `duel did NOT start` 超时：看 `/lobby.ready`（是否真 ready）、`/lobby.playerCount`（是否只有自己 → 空房：**进房 35s 内没人进来就 `/leave` 重排**） |
 
 > 典型故障：截图里“双方都 ✓ 但没开始”= 只做了 ready、没做 start（或 start 发得太早，之后没重试）。
 
@@ -118,7 +118,7 @@ GET /act_id?id=0             # = 点真实 btnSideOK / MCP: control_side_done
 |---|---|
 | 整场结束 `STOC_DUEL_END` | `GET /leave` → 杀客户端 → 重新排队（下一场） |
 | 对手回合长时间无包（`sinceLastStoc` 持续增长、`timeLeft` 冻结、`awaiting=false`） | 判"对手失联/空等"：静默 2–5 分钟后 `/leave` + 重排（不要一直等） |
-| 空房（`/lobby.playerCount<2` 持续 >10s） | 直接 `/leave` + 重排 |
+| 空房（进房后 **35 秒**内没有第二个人进来，`/lobby.playerCount<2`） | 立即 `/leave` + 重排；不要傻等（`ranked-loop.ps1 -EmptyRoomSec 35`，默认 35s） |
 | `connection lost` / `/net.state=="disconnected"` | 中止本场、重排（可选：`/join` 同房重连，有 journal 时能回同一局） |
 | 准备/开始失败 | 重试 ready（每 1–2s）、start（每 2–3s），最多 ~30 次；仍失败则离开重排并抓 `/lobby`、`/state.deckError` |
 | 打完发现输多赢少 | 那是策略问题（policy 偏保守），不是流程问题 |

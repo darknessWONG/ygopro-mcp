@@ -10,7 +10,8 @@ param(
   [int]$ShotEverySec = 10,
   [int]$StallSec = 75,
   [int]$MaxTotalMinutes = 90,
-  [int]$SilentAbortSec = 150
+  [int]$SilentAbortSec = 150,
+  [int]$EmptyRoomSec = 35
 )
 $ErrorActionPreference = 'Continue'
 $root = 'D:\dsh_workspaces\MC_bot_dsh'
@@ -151,8 +152,16 @@ while ($successCount -lt $Runs -and (Get-Date) -lt $totalDeadline) {
     if ($lb -and $lb.ready -and ($lb.ready.Count -ge 2)) { $selfReady = ([int]$lb.ready[[int]$lb.self] -eq 1) }
     $playerCount = 0
     if ($lb -and $lb.statuses) { $playerCount = $lb.statuses.Count }
-    if ($playerCount -lt 2) { $emptyTicks++ } else { $emptyTicks = 0 }
-    if ($emptyTicks -ge 6) { W ("empty room: only {0} player(s) for {1}s -> leave and re-queue" -f $playerCount, ($emptyTicks*2)); $noOpponent = $true; break }
+    # joined but nobody else showed up within EmptyRoomSec -> leave and re-queue
+    if ($playerCount -lt 2) {
+      if (-not $emptySince) { $emptySince = Get-Date; W ("room is empty, waiting up to {0}s for an opponent" -f $EmptyRoomSec) }
+      elseif (((Get-Date) - $emptySince).TotalSeconds -ge $EmptyRoomSec) {
+        W ("nobody joined within {0}s -> leave and re-queue" -f $EmptyRoomSec)
+        try { $null = JPost 'http://127.0.0.1:7788/leave' } catch {}
+        Start-Sleep -Seconds 2
+        $noOpponent = $true; break
+      }
+    } else { $emptySince = $null }
     if (-not $selfReady -and $readySends -lt 30) { $null = JPost 'http://127.0.0.1:7788/ready'; $readySends++ }
     # both sides ready does NOT auto-start: keep sending HS_START until /state.started.
     # (lobby.statuses can lag / miss the opponent, so also trigger on bothReady or our own ready.)
