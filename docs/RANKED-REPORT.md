@@ -145,6 +145,7 @@
 5. **账号/风控**：仅用 `1173810` 一个账号；排位自动化有账号风险，不要多开排队。
 6. **依赖客户端版本**：`/state.deckError`、`/state.isWin/isLoss/isDraw`、`/state.pipeline.recentMsgs`、`CHAIN raw` 等是本轮新增，旧 exe 没有。
 7. **卡组合规**：`BlackwingHT2` 依赖排位服当前 lflist；换服/换表前先用 `lflist.conf` 复核。
+8. **回放保存框（`STOC_REPLAY`）**：控制驱动下客户端**直接跳过**（日志 `replay: dialog skipped (control-driven, no wait)`），不阻塞网络线程；**排位 LP_ZERO 结算不触发该路径**（回放框只在特定结算出现）；已 **LAN 实机验证**（2026-11-13：双方各 2 次、`replay-save=0`、`stoc=23 stall=0`），排位侧暂无触发样本。
 
 ---
 
@@ -159,3 +160,15 @@
 | journal / resume | `mycard-bot/game/resume-context-7788.json`、`resume-context-7789.json`；日志 `RESUME journal loaded/ignored` |
 | 重连设计与实测 | [`reconnect-lab.md`](reconnect-lab.md)、[`RECONNECT-DESIGN.md`](RECONNECT-DESIGN.md)、[`net-probe.md`](net-probe.md)、`ranked/logs/supervisor-t30.jsonl` |
 | 客户端日志关键字（grep 验证存在） | `CHAIN raw selecting=..`、`CHAIN analyze curMsg=.. rawCount=.. autoHandled=.. hand=[..] handTraps=..`、`CHAIN publish seq=.. cands=.. (fromAnalyze=..)`、`PROMPT skip auto-handled`、`PROMPT publish seq=..`、`deck: select combo name=.. -> confirmed`、`ready: clicking HP_READY via UI`、`MSG_WIN player=.. localPlayer=.. isWin=..`、`NETMSG suppressed tag=..`、`UI auto-confirm kind=hint-message|card-select-confirm`、`UI hide wMainMenu (duel started)` |
+
+---
+
+## 9. 2026-11-13 补充：`/state.match` 与 `control_match`（LAN 已验证）
+
+- **客户端 `/state.match`**（2026-11-13 14:51:46 版起）：
+  `{game, over, games:[{game,win,winnerSeat,reason,reasonName}], gamesWonLocal, gamesWonOpp, lastWinnerLocal, lastReasonName}`
+  —— `win` 是本地视角、`winnerSeat` 是 raw 座位号；`over=true` 为整场结束（Bo3 到 2 胜）。
+- **MCP `control_match`**（`bridge/mcp-server.mjs`）：`GET /state` → `{match, summary}`；`summary` 是中文一句话（"比赛结束：你赢了这场 Bo3（2:0）。最后一局原因：对手掉线/失联（DISCONNECT）" / "第 2 局进行中；当前大比分 1:0（你领先）"）；原因翻译 `SURRENDER/LP_ZERO/DECK_OUT/TIMEOUT/DISCONNECT`；旧客户端（无 `state.match`）返回 `fallback:true` 并降级到当前局。
+- **LAN 验收**：`match-state-20261113-145150`——`/state.match` 三阶段 PASS（G1 `games[0]` → G2 两条 `2:0` → `DUEL_END` `over=true`）、`/start` latch PASS、`YGO_TP` PASS、`side_ok` PASS；`VERDICT: over=True won=2 games=2`。
+- **回放跳过（LAN 首次实机）**：双方各 2 次 `replay: dialog skipped (control-driven, no wait)`、`replay-save=0`、`stoc=23 stall=0`。
+- 证据：`ranked/logs/match-state-20261113-145150/`、`ranked/logs/lan-match-state-validation.md`（另见 `MCP-INTERFACE.md` §5.6 / §9 第 10 条）。

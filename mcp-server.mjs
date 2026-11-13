@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // bridge/mcp-server.mjs - MCP (stdio) server exposing the instrumented client's control API.
 //
-// Tools (16):
-//   control_state        -> GET  /state
+// Tools (17):
+//   control_state        -> GET  /state  (whole match result is passed through as `match`; see control_match)
+//   control_match        -> GET  /state  -> {match, summary}   (one-line human-readable Bo3 result)
 //   control_wait_prompt  -> GET  /wait_prompt?since&timeout_ms   (long poll, the main loop primitive)
 //   control_actions      -> GET  /actions
 //   control_act_id       -> GET  /act_id?id=N
@@ -36,10 +37,177 @@ const qs = (o) => Object.entries(o || {})
   .filter(([, v]) => v !== undefined && v !== null && v !== '')
   .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&');
 
+// ---------------------------------------------------------------- match result summary
+// Newer clients expose /state.match:
+//   { games:[{game,winPlayerLocal,reasonName,...}], gamesWonLocal, gamesWonOpp, over, lastReasonName }
+// Older clients omit it -> control_match degrades to the current-game view from /state (no crash).
+const MATCH_REASON_ZH_WIN = {
+  SURRENDER: '对手投降',
+  LP_ZERO: '对手 LP 归零',
+  DECK_OUT: '对手抽卡耗尽',
+  TIMEOUT: '对手超时',
+  DISCONNECT: '对手掉线/失联',
+};
+const MATCH_REASON_ZH_LOSS = {
+  SURRENDER: '你投降',
+  LP_ZERO: '你 LP 归零',
+  DECK_OUT: '你抽卡耗尽',
+  TIMEOUT: '你超时',
+  DISCONNECT: '你掉线/失联',
+};
+
+function reasonRaw(...vals) {
+  for (const v of vals) {
+    if (v === undefined || v === null) continue;
+    const s = String(v).trim();
+    if (s !== '') return s;
+  }
+  return '';
+}
+
+function reasonZh(raw, weWon) {
+  const s = String(raw || '').trim();
+  if (!s) return '未知';
+  const table = weWon ? MATCH_REASON_ZH_WIN : MATCH_REASON_ZH_LOSS;
+  return table[s.toUpperCase()] || s;
+}
+
+// best-effort: which side won a single game entry (true = local/we won)
+// Real client schema: {game, win:<bool local>, winnerSeat:<raw seat>, reason, reasonName}
+// (older/proposed variants winPlayerLocal/isWin/winner are kept as fallbacks)
+function gameLocalWin(g, st) {
+  if (!g || typeof g !== 'object') return null;
+  if (typeof g.win === 'boolean') return g.win;
+  if (typeof g.winPlayerLocal === 'number') {
+    if (g.winPlayerLocal === 0) return true;
+    if (g.winPlayerLocal === 1) return false;
+    return null;
+  }
+  if (typeof g.isWin === 'boolean') return g.isWin;
+  if (typeof g.winner === 'number') return g.winner === 0;
+  if (typeof g.winnerSeat === 'number') {
+    const mySeat = Number.isFinite(Number(st?.mySeat)) ? Number(st.mySeat) : null;
+    if (mySeat !== null) return g.winnerSeat === mySeat;
+    return g.winnerSeat === 0;
+  }
+  if (typeof g.result === 'string') {
+    const r = g.result.toLowerCase();
+    if (r === 'win') return true;
+    if (r === 'loss' || r === 'lose') return false;
+  }
+  return null;
+}
+
+function gameReason(g) {
+  if (!g || typeof g !== 'object') return '';
+  return reasonRaw(g.reasonName, g.winReasonName, g.reasonText, g.reason);
+}
+
+// "原因 LP_ZERO（对手 LP 归零）" for a single game; unknown names stay as-is (no duplicate brackets).
+function gameCause(raw, weWon) {
+  if (!raw) return '';
+  const zh = reasonZh(raw, weWon === true);
+  return zh === raw ? `，原因 ${raw}` : `，原因 ${raw}（${zh}）`;
+}
+
+// "。最后一局原因：对手掉线/失联（DISCONNECT）" for the match summary.
+function lastCause(raw, weWon) {
+  if (!raw) return '';
+  const zh = reasonZh(raw, weWon === true);
+  return zh === raw ? `。最后一局原因：${raw}` : `。最后一局原因：${zh}（${raw}）`;
+}
+
+function scoreText(local, opp) {
+  return `${local}:${opp}`;
+}
+
+function leadText(local, opp) {
+  if (local === opp) return '（平）';
+  return local > opp ? '（你领先）' : '（你落后）';
+}
+
+function summarizeMatch(st) {
+  const s = st && typeof st === 'object' ? st : {};
+  const m = s.match && typeof s.match === 'object' ? s.match : null;
+  const games = Array.isArray(m?.games) ? m.games
+    : Array.isArray(m?.results) ? m.results
+      : Array.isArray(m?.duels) ? m.duels : [];
+  const inDuel = !!s.inDuel;
+  const started = !!(s.started || inDuel || s.turn > 0);
+
+  let local = Number.isFinite(Number(m?.gamesWonLocal)) ? Number(m.gamesWonLocal) : null;
+  let opp = Number.isFinite(Number(m?.gamesWonOpp)) ? Number(m.gamesWonOpp) : null;
+  if (local === null || opp === null) {
+    const counted = games.map((g) => gameLocalWin(g, s));
+    if (local === null) local = counted.filter((w) => w === true).length;
+    if (opp === null) opp = counted.filter((w) => w === false).length;
+  }
+
+  const over = m ? (m.over === true || m.finished === true || m.done === true) : false;
+  const bo3Over = local >= 2 || opp >= 2;
+
+  // --- no match object (old client): degrade to current-game view
+  if (!m) {
+    if (inDuel) return { match: null, fallback: true, summary: `第 1 局进行中（旧客户端无整场汇总，turn ${s.turn ?? '?'}）` };
+    const w = typeof s.winPlayerLocal === 'number' ? s.winPlayerLocal : -1;
+    if (w === 0 || s.isWin === true) {
+      const raw = reasonRaw(s.winReasonName, s.winReason);
+      return { match: null, fallback: true, summary: `本局：你赢了，原因 ${raw || '未知'}（${reasonZh(raw, true)}）` };
+    }
+    if (w === 1 || s.isWin === false) {
+      const raw = reasonRaw(s.winReasonName, s.winReason);
+      return { match: null, fallback: true, summary: `本局：你输了，原因 ${raw || '未知'}（${reasonZh(raw, false)}）` };
+    }
+    return { match: null, fallback: true, summary: '还没有开始对局' };
+  }
+
+  // --- match over (either explicit flag or a Bo3 side reaching 2 wins)
+  if (over || bo3Over) {
+    const last = games.length ? games[games.length - 1] : null;
+    const lastLocal = gameLocalWin(last, s);
+    const raw = reasonRaw(m.lastReasonName, gameReason(last));
+    const weWon = local > opp ? true : local < opp ? false : (lastLocal === null ? null : lastLocal);
+    // reason wording is from the last game's perspective when the client tells us (lastWinnerLocal)
+    const lastWeWon = typeof m.lastWinnerLocal === 'boolean' ? m.lastWinnerLocal : (weWon === null ? lastLocal : weWon);
+    const tail = lastCause(raw, lastWeWon === true);
+    if (weWon === null) return { match: m, summary: `比赛结束：大比分 ${scoreText(local, opp)}${tail}` };
+    return { match: m, summary: `比赛结束：${weWon ? '你赢了' : '你输了'}这场 Bo3（${scoreText(local, opp)}）${tail}` };
+  }
+
+  // --- duel in progress
+  if (inDuel) {
+    const g = Number(m?.game);
+    const gameNo = Number.isFinite(g) && g > 0 ? g : games.length + 1;
+    return { match: m, summary: `第 ${gameNo} 局进行中；当前大比分 ${scoreText(local, opp)}${leadText(local, opp)}` };
+  }
+
+  // --- between games (a game just ended, next not started)
+  if (games.length) {
+    const last = games[games.length - 1];
+    const won = gameLocalWin(last, s);
+    const raw = gameReason(last);
+    const who = won === true ? '你赢了' : won === false ? '你输了' : '本局结果未知';
+    const cause = gameCause(raw, won === true);
+    return { match: m, summary: `第 ${games.length} 局：${who}${cause}；当前大比分 ${scoreText(local, opp)}${leadText(local, opp)}` };
+  }
+
+  return { match: m, summary: started ? '还没有开始对局' : '还没有开始对局' };
+}
+
 const TOOLS = [
   {
     name: 'control_state',
-    description: 'Get the full duel state: turn, phase, LP, hand/field/grave/deck counts with card details, pending prompt counters.',
+    description: 'Get the full duel state: turn, phase, LP, hand/field/grave/deck counts with card details, pending prompt counters. ' +
+      'The whole Bo3 result is passed through as state.match; for a ready-to-read Chinese summary of the match result use control_match.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'control_match',
+    description:
+      'Whole-match (Bo3) result for the LLM, in one line of Chinese: who won the match, why, the series score, and whether the match is over. ' +
+      'Reads GET /state and derives the summary from state.match (games[], gamesWonLocal/gamesWonOpp, over, lastReasonName). ' +
+      'Returns {match, summary} (match is the raw /state.match object; on older clients without it, match=null + fallback=true and the summary degrades to the current game). ' +
+      'Use this instead of reading /state.winPlayer when you need "did I win this match and why".',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
@@ -168,6 +336,14 @@ const TOOLS = [
 async function callTool(name, args) {
   switch (name) {
     case 'control_state': return http('/state');
+    case 'control_match': {
+      // Never throw for a dead/missing control layer: the MCP caller should get a readable summary either way.
+      try {
+        return summarizeMatch(await http('/state'));
+      } catch (e) {
+        return { match: null, fallback: true, error: String(e?.message || e), summary: '读不到 /state（客户端未连接或控制层无响应）' };
+      }
+    }
     case 'control_msg': return http('/msg');
     case 'control_health': return http('/health');
     case 'control_lobby': return http('/lobby');

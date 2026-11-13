@@ -3,8 +3,8 @@
 > **读者**：后续接手的 LLM / agent / 工程师。**只读本文档 + 附录即可接入**，不需要先读懂 ygopro 协议。
 >
 > **适用版本（当前正式版 exe）**：`mycard-client/bin/release/x64/YGOPro.exe`
-> = **2026-11-13 01:11:32 / 6,316,032 B**，SHA256 `4D9FE13673CD042A8CBCF73367D0E34AE743622EA24ED728C50081B7C5AD1F2E`
-> （2026-11-13 实机 3/3 Bo3 验收版：Bo3 换备可操作（`/state.side` + `POST /side_swap` + `side_ok` 竞态修复）+ 控制驱动跳过 `STOC_REPLAY` + 被动判死诊断 + 回放框跳过 + Game2/3 结果重置；验收/历史版本见文末记录）
+> = **2026-11-13 14:51:46 / 6,319,104 B**，SHA256 `CDB25977ED3A568D724B90B738595CAB1B7ED8F2C870939E9461944C925DE2FC`
+> （2026-11-13 LAN 全流程验收版：Bo3 换备可操作（`/state.side` + `POST /side_swap` + `side_ok` 竞态修复）+ **`/state.match` 整场结果** + `/start` latch + `YGO_TP`/`YGO_SIDE_AUTO` + 控制驱动跳过 `STOC_REPLAY`（已实机验证）+ 被动判死诊断 + Game2/3 结果重置；验收/历史版本见文末记录）
 > `/state.resume.reason` 在加载成功时返回 `"loaded"`，行为不变；22:23:28 已做过冒烟）。
 > 该版含重连基础能力：`GET /net`、自动 `/tip` 探活、`YGO_SUPPRESS_MODALS` 模态框抑制、
 > `resume-context-<port>.json` journal、`POST /leave`（详见 [RECONNECT-DESIGN.md](RECONNECT-DESIGN.md)、[reconnect-lab.md](reconnect-lab.md)）。
@@ -53,7 +53,7 @@
         └───────────┬────────────┘
                     │ MCP (stdio, JSON-RPC)
         ┌───────────▼────────────┐
-        │ bridge/mcp-server.mjs  │   薄桥：16 个工具 → HTTP
+        │ bridge/mcp-server.mjs  │   薄桥：17 个工具 → HTTP
         └───────────┬────────────┘
                     │ HTTP 127.0.0.1:7788（房主）/ 7789（客人）
         ┌───────────▼───────────────────────────────────────┐
@@ -102,9 +102,9 @@
 
 ---
 
-## 2. MCP 工具清单（`bridge/mcp-server.mjs` 的 16 个工具）
+## 2. MCP 工具清单（`bridge/mcp-server.mjs` 的 17 个工具）
 
-> 全部无参数或只有简单参数；返回体就是对应 HTTP 端点的 JSON（原文透传，见 §4）。
+> 全部无参数或只有简单参数；返回体就是对应 HTTP 端点的 JSON（原文透传，见 §4）。**例外**：`control_match` 返回派生的 `{match, summary}`（见 §5.6）。
 
 | # | 工具 | 用途 | 参数 | HTTP |
 |---|---|---|---|---|
@@ -124,6 +124,7 @@
 | 14 | `control_msg` | 最近一条原始服务器消息（调试） | — | `GET /msg` |
 | 15 | `control_side_move` | **Bo3 换备**：把 N 张卡在 side/main/extra 之间移动（详见 §5.5） | `code`(number，卡号)、`from`(side\|main\|extra)、`to`(main\|extra\|side)、`n`(默认 1) | `POST /side_swap?code&from&to&n` |
 | 16 | `control_side_done` | **Bo3 换备**：换完牌点"确定"继续下一局（等价 `btnSideOK`） | — | 先 `GET /actions` 找 `kind=side_ok` 的 id，再 `GET /act_id?id=` |
+| 17 | `control_match` | **整场结果一句话**（谁赢/为什么/大比分/是否结束，详见 §5.6） | — | `GET /state`，读 `state.match` 派生 |
 
 **MCP 连接示例（JSON-RPC over stdio）**
 
@@ -490,6 +491,57 @@ Bo3 每两局之间，客户端进入换备牌阶段。**控制驱动模式下�
 
 ---
 
+### 5.6 整场结果（`/state.match` + `control_match`）
+
+LLM 想回答"**我赢了吗/为什么赢/大比分多少/比赛结束没**"时，**优先用 `control_match`**（`GET /state` 派生），不要自己从 `winPlayer` 推。
+
+**`/state.match`（新客户端提供；旧客户端没有这个对象）**
+
+```json
+{"game":2,"over":true,
+ "games":[{"game":1,"win":true,"winnerSeat":0,"reason":1,"reasonName":"LP_ZERO"},
+          {"game":2,"win":true,"winnerSeat":0,"reason":4,"reasonName":"DISCONNECT"}],
+ "gamesWonLocal":2,"gamesWonOpp":0,
+ "lastWinnerLocal":true,"lastReasonName":"DISCONNECT"}
+```
+
+| 字段 | 含义 |
+|---|---|
+| `game` | 当前第几局（1 起） |
+| `over` | 整场是否结束（Bo3 某一方到 2 胜） |
+| `games[]` | 逐局结果：`win`(bool，本地视角你赢没赢)、`winnerSeat`(raw 座位号 0/1)、`reason`(原始 enum)、`reasonName`(原名) |
+| `gamesWonLocal` / `gamesWonOpp` | 大比分（你 / 对手）；缺失时 `control_match` 会按 `games[]` 计数 |
+| `lastWinnerLocal` / `lastReasonName` | 最后一局你是否赢 / 原因原名（`LP_ZERO` 等） |
+
+**原因翻译（`control_match` 自动做）**
+
+| 原名 | 你赢时 | 你输时 |
+|---|---|---|
+| `SURRENDER` | 对手投降 | 你投降 |
+| `LP_ZERO` | 对手 LP 归零 | 你 LP 归零 |
+| `DECK_OUT` | 对手抽卡耗尽 | 你抽卡耗尽 |
+| `TIMEOUT` | 对手超时 | 你超时 |
+| `DISCONNECT` | 对手掉线/失联 | 你掉线/失联 |
+| 其它 | 原样输出 | 原样输出 |
+
+**`control_match` 返回**
+
+```json
+{"match": { "...原样 /state.match..." : "..." },
+ "summary": "比赛结束：你赢了这场 Bo3（2:0）。最后一局原因：对手掉线/失联（DISCONNECT）"}
+```
+
+`summary` 覆盖 4 种状态：
+- 未开局 → `还没有开始对局`
+- 进行中 → `第 2 局进行中；当前大比分 1:0（你领先）`
+- 某局刚结束（局间/换备） → `第 1 局：你赢了，原因 LP_ZERO（对手 LP 归零）；当前大比分 1:0（你领先）`
+- 整场结束 → `比赛结束：你赢了这场 Bo3（2:0）。最后一局原因：…` / `比赛结束：你输了这场 Bo3（0:2）。…`
+
+**旧客户端降级**：没有 `state.match` 时返回 `{"match":null,"fallback":true,"summary":"..."}`，summary 用当前局字段（`inDuel`/`winPlayerLocal`/`winReasonName`）尽力表达（如 `第 1 局进行中（旧客户端无整场汇总，turn 7）`、`本局：你赢了，原因 LP_ZERO（对手 LP 归零）`），**不会报错**。
+`control_state` 的返回里保留原样 `match`（透传），但要"给用户/自己报结果"时用 `control_match`。
+
+---
+
 ## 6. 连锁设计（重点）
 
 > 本节整合附录 [`MCP-INTERFACE-poc.md`](MCP-INTERFACE-poc.md) 的 B 节；细节以该附录为准。
@@ -786,9 +838,9 @@ $env:YGO_UI_ACTIONS='0'; powershell ... bridge\lan-run.ps1 -Games 1
 5. **链字段有 1 帧延迟**：`/state` 与 `/prompt` 的链字段来自 UI 线程快照；`chainStack[].forced` 恒 false、`type` 固定 `effect`。
 6. **UI 模式个别动作有 600ms 校验延迟**（点不中时才会走满）。
 7. **多效果卡默认点第 0 个 option**（可能不是最优效果）；`announce/counter/sort/sum` 是"安全默认"而非最优。
-8. **线上排位：能完整打完，但胜率依赖策略**：客户端/管线侧已实测可拿房→进房→选卡组→准备→完整对局→自然结算（LP_ZERO 等），并支持受控掉线后约 13s 重连回同房继续打；输局主要是 policy 保守（大量 `decline`/`to_bp`/`end`），不是管线卡死。**排位相关新字段（`/state.deckError`、`/state.isWin/isLoss/isDraw`、`/state.lpOrder`、`/state.pipeline.recentMsgs`、`/state.tpPending`+`/state.tpOptions`、`/actions` 的先/后攻动作 `kind:"tp"`+`index:1|2`、`/state.sidePending`、`/actions` 的换备牌动作 `kind:"side_ok"`（Bo3 每局之间，`id=0` → `btnSideOK`/`SendUpdateDeck`）、**`/state.side`（`available/pending/waiting/elapsedMs/waitingSeen/lastWaitMs/main/extra/side/counts/pre/limits/error`）+ `POST /side_swap`（真正换牌）+ `side_ok` 竞态修复**、`CHAIN raw` 等；Bo3 Game2/3 开局客户端会 `DUEL_START reset result state` 重置 `winPlayer/winReason`）只在客户端 `2026-11-13 01:11:32 / 6,316,032 B`（sha256 `4D9FE13673CD042A8CBCF73367D0E34AE743622EA24ED728C50081B7C5AD1F2E`）及之后存在**；旧 exe 请先升级。详见 [`RANKED-REPORT.md`](RANKED-REPORT.md)。
+8. **线上排位：能完整打完，但胜率依赖策略**：客户端/管线侧已实测可拿房→进房→选卡组→准备→完整对局→自然结算（LP_ZERO 等），并支持受控掉线后约 13s 重连回同房继续打；输局主要是 policy 保守（大量 `decline`/`to_bp`/`end`），不是管线卡死。**排位相关新字段（`/state.deckError`、`/state.isWin/isLoss/isDraw`、`/state.lpOrder`、`/state.pipeline.recentMsgs`、`/state.tpPending`+`/state.tpOptions`、`/actions` 的先/后攻动作 `kind:"tp"`+`index:1|2`、`/state.sidePending`、`/actions` 的换备牌动作 `kind:"side_ok"`（Bo3 每局之间，`id=0` → `btnSideOK`/`SendUpdateDeck`）、**`/state.side`（`available/pending/waiting/elapsedMs/waitingSeen/lastWaitMs/main/extra/side/counts/pre/limits/error`）+ `POST /side_swap`（真正换牌）+ `side_ok` 竞态修复**、**`/state.match`（`game`/`over`/`games[]`（含 `win`/`winnerSeat`/`reasonName`）/`gamesWonLocal`/`gamesWonOpp`/`lastWinnerLocal`/`lastReasonName`，配合 `control_match` 一句话报结果）**、`CHAIN raw` 等；Bo3 Game2/3 开局客户端会 `DUEL_START reset result state` 重置 `winPlayer/winReason`）只在客户端 `2026-11-13 14:51:46 / 6,319,104 B`（sha256 `CDB25977ED3A568D724B90B738595CAB1B7ED8F2C870939E9461944C925DE2FC`）及之后存在**；旧 exe 请先升级。详见 [`RANKED-REPORT.md`](RANKED-REPORT.md)。
 9. **被动判死（对手回合 60s eff + `NET silence diag`）**：对手长时间不出手时，客户端会按"对手回合 60s eff"推进判定，并在 `/net` 相关日志打 `NET silence diag`（链路静默诊断，不主动断线）；被动判死不是本仓库 policy 的行为，属客户端/服务端规则。`/net` 的 `alive`/`sinceLastStoc` 在静默期会持续增长——要区分"对手在思考（slow play）"和"对手掉线"，以 `NET silence diag` + `/net.probe` 的 `fails`/`rttMs` 判断；详见 `mycard-client/docs/CONTROL-API.md` 的 `/net` 一节。
-10. **控制驱动下 `STOC_REPLAY` 直接跳过（`replay: dialog skipped`）**：不会弹回放对话框、**不阻塞网络线程**（否则回放保存框会卡住后续 STOC）。注意：该路径在排位 LP_ZERO 自然结算场景**尚未触发**，待 LAN 补验；若上线后出现结算后收不到后续包，先查这里。
+10. **控制驱动下 `STOC_REPLAY` 直接跳过（`replay: dialog skipped`）**：不会弹回放对话框、**不阻塞网络线程**（否则回放保存框会卡住后续 STOC）。**已 LAN 实测**（2026-11-13：双方各 2 次 `replay: dialog skipped (control-driven, no wait)`、`replay-save=0`、`stoc=23 stall=0`）；排位 LP_ZERO 结算场景同样走该路径（不再需要"未实测"假设）。若上线后出现结算后收不到后续包，先查这里。
 
 ---
 

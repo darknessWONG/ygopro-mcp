@@ -112,6 +112,17 @@ GET /act_id?id=0             # = 点真实 btnSideOK / MCP: control_side_done
 - 整场结束：`STOC_DUEL_END`（`/state.lastStocName` 或 `/net.lastStocName` 可见）。
 - 判定一局 vs 一整场：**看 `STOC_DUEL_END`**，不是看第一次 `MSG_WIN`。一局结束在 Bo3 里还会继续。
 
+**每局/整场结束后，用 `control_match` 报告结果（给用户/给自己）**：
+
+- 它返回 `{match, summary}`，`summary` 是中文一句话：谁赢、为什么、大比分、是否结束（例：`比赛结束：你赢了这场 Bo3（2:0）。最后一局原因：对手掉线/失联（DISCONNECT）`）。
+- `/state.match` 原始字段（2026-11-13 版起）：`game`(当前局)、`over`、`games:[{game,win,winnerSeat,reason,reasonName}]`、`gamesWonLocal`/`gamesWonOpp`、`lastWinnerLocal`/`lastReasonName`；`win` 是本地视角，`winnerSeat` 是 raw 座位号。
+- **不要**自己从 `/state.winPlayer` 推整场结论（那只代表当前局；Bo3 里一局结束还会继续）。
+- 典型用法（每局结束 / 换备前 / 整场 `STOC_DUEL_END` 后各调一次）：
+  - 局间（side 阶段）：`第 1 局：你赢了，原因 LP_ZERO（对手 LP 归零）；当前大比分 1:0（你领先）`
+  - 整场结束：`比赛结束：你赢了这场 Bo3（2:0）。最后一局原因：…`（或你输了/N:0）
+- 旧客户端（无 `state.match`）会返回 `fallback:true` 并用当前局字段尽力表达；拿不到就按 `/state.winPlayerLocal` 语业务必说明"仅当前局"。
+- 原因翻译：`SURRENDER`=投降、`LP_ZERO`=LP 归零、`DECK_OUT`=抽卡耗尽、`TIMEOUT`=超时、`DISCONNECT`=掉线/失联，其它原样。
+
 ## 8. 收尾与异常处理
 
 | 情况 | 处理 |

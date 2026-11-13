@@ -1,13 +1,13 @@
 # ygopro-mcp
 
-把 **YGOPro 客户端**接到 **MCP（Model Context Protocol）**：LLM / agent 通过 16 个 MCP 工具，
+把 **YGOPro 客户端**接到 **MCP（Model Context Protocol）**：LLM / agent 通过 17 个 MCP 工具，
 用「语义动作」打牌——不用拼 CTOS/STOC 二进制帧，也不需要用像素点屏幕。
 
 ```
    LLM / agent（MCP 宿主）
         │  MCP over stdio (JSON-RPC)
         ▼
-   bridge/mcp-server.mjs        薄桥：16 个工具 → HTTP
+   bridge/mcp-server.mjs        薄桥：17 个工具 → HTTP
         │  HTTP 127.0.0.1:7788（房主）/ 7789（客机）
         ▼
    带控制层的 YGOPro 客户端      进程内 HTTP server + 动作编码 + UI 注入
@@ -27,7 +27,7 @@
 
 | 需要 | 说明 |
 |---|---|
-| **带控制层的 YGOPro 客户端** | 本仓库**不包含**客户端二进制。控制层是客户端源码里的扩展（`gframe/control*.cpp`，HTTP 端点 `/state` `/prompt` `/wait_prompt` `/actions` `/act_id` `/net` `/ui` 等）。<br>**已测试构建**：`YGOPro.exe` **`2026-11-13 01:11:32` / `6,316,032 B`**<br>SHA256：`4D9FE13673CD042A8CBCF73367D0E34AE743622EA24ED728C50081B7C5AD1F2E`<br>核对：`node doctor.mjs --client <exe>`（默认比 size；加 `--strict-build` 同时比 sha256 —— 用于区分"同 size 不同 build"）。<br>构建：用带控制层补丁的 YGOPro 源码（MyCard 客户端 fork）自行编译，产物放到例如 `mycard-client/bin/release/x64/YGOPro.exe`。 |
+| **带控制层的 YGOPro 客户端** | 本仓库**不包含**客户端二进制。控制层是客户端源码里的扩展（`gframe/control*.cpp`，HTTP 端点 `/state` `/prompt` `/wait_prompt` `/actions` `/act_id` `/net` `/ui` 等）。<br>**已测试构建**：`YGOPro.exe` **`2026-11-13 14:51:46` / `6,319,104 B`**<br>SHA256：`CDB25977ED3A568D724B90B738595CAB1B7ED8F2C870939E9461944C925DE2FC`<br>核对：`node doctor.mjs --client <exe>`（默认比 size；加 `--strict-build` 同时比 sha256 —— 用于区分"同 size 不同 build"）。<br>构建：用带控制层补丁的 YGOPro 源码（MyCard 客户端 fork）自行编译，产物放到例如 `mycard-client/bin/release/x64/YGOPro.exe`。 |
 | **Node.js ≥ 18** | 只用内置模块（`fetch`/`http`/`child_process`），**零 npm 依赖**。 |
 | （可选）卡组 `.ydk` | 客户端自己的 `deck/` 目录；控制层用 `POST /deck?name=Blackwing` 预载。本仓库不含卡图/卡表。 |
 
@@ -94,7 +94,7 @@ node doctor.mjs --client "C:\path\to\YGOPro.exe" --strict-build   # 发布自检
 
 | 路径 | 类别 | 作用 |
 |---|---|---|
-| `mcp-server.mjs` | runtime | MCP stdio server，16 个工具 → HTTP |
+| `mcp-server.mjs` | runtime | MCP stdio server，17 个工具 → HTTP |
 | `policy-semantic.mjs` | runtime | 参考策略（语义决策循环；可当 LLM 的替身） |
 | `supervisor.mjs` | runtime | 常驻监护：读 `/net` 判掉线；`--profile lan` 只记账，`--profile ranked` 重启客户端并重连+验证 |
 | `doctor.mjs` | ops | 自检（本文件） |
@@ -129,7 +129,8 @@ node doctor.mjs --client "C:\path\to\YGOPro.exe" --strict-build   # 发布自检
 
 ### 更新记录（近期）
 
-- **2026-11-13** 客户端 `01:11:32 / 6,316,032 B`：控制驱动下 `STOC_REPLAY` 直接跳过（`replay: dialog skipped`，不阻塞网络线程）；3/3 Bo3 实机验收通过（无 eof、无 stall）。
+- **2026-11-13** 客户端 `14:51:46 / 6,319,104 B`：LAN 全流程验收（`VERDICT: over=True won=2 games=2`）——`/state.match` 整场结果（`game/over/games[]/gamesWonLocal/gamesWonOpp/lastWinnerLocal/lastReasonName`）、`/start` latch 修复、`YGO_TP`/`YGO_SIDE_AUTO`、控制驱动 `STOC_REPLAY` 直接跳过（`replay: dialog skipped`，**LAN 实测** 双方各 2 次、`replay-save=0`、`stoc=23 stall=0`）；MCP 侧新增 `control_match` 一句话报结果。
+- **2026-11-13** 客户端 `01:11:32 / 6,316,032 B`（历史）：控制驱动下 `STOC_REPLAY` 跳过 + 3/3 Bo3 实机验收；现已被 `14:51:46` 版取代。
 - **2026-11-10** 客户端 `00:07:02 / 6,295,040 B`：Bo3 Game2/3 结果状态重置（`DUEL_START reset result state`）；
   bridge 侧同步 fingerprint + sha256，doctor 新增 `--strict-build`（size+sha256）。
 - **2026-11-09** 客户端：Bo3 换备牌 `side_ok`（`STOC_CHANGE_SIDE`）+ 回放保存框自动跳过（限流 1s）。
@@ -143,7 +144,7 @@ node doctor.mjs --client "C:\path\to\YGOPro.exe" --strict-build   # 发布自检
 | 文档 | 内容 |
 |---|---|
 | [docs/MATCH-PLAYBOOK.md](docs/MATCH-PLAYBOOK.md) | **对局操作手册（给 AI）**：排队/进房/选卡组/准备/**开始**/TP/决策/换备(side_ok)/下一局/收尾 的完整步骤与判定、异常处理 |
-| [`docs/MCP-INTERFACE.md`](docs/MCP-INTERFACE.md) | **接口规范（权威）**：16 个工具、所有 HTTP 端点、`/state`/`/prompt`/`/ui` 字段、`/actions` kind 全表、连锁语义、UI 注入设计、运行开关、排障 |
+| [`docs/MCP-INTERFACE.md`](docs/MCP-INTERFACE.md) | **接口规范（权威）**：17 个工具、所有 HTTP 端点、`/state`/`/prompt`/`/ui` 字段、`/actions` kind 全表、连锁语义、UI 注入设计、运行开关、排障 |
 | [`docs/RECONNECT-DESIGN.md`](docs/RECONNECT-DESIGN.md) | 掉线/重连设计：`/net` 状态机、supervisor 职责、journal（`resume-context-<port>.json`）、探活参数 |
 | [`docs/supervisor.md`](docs/supervisor.md) | supervisor 用法、状态机、JSONL 字段 |
 | [`docs/direct-actions.md`](docs/direct-actions.md) | 哪些动作走 UI、哪些走直连、对 LLM 的影响、改进路线 |
