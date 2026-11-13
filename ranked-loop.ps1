@@ -18,7 +18,7 @@ $root = 'D:\dsh_workspaces\MC_bot_dsh'
 $game = Join-Path $root 'mycard-bot\game'
 $exe  = Join-Path $root 'mycard-client\bin\release\x64\YGOPro.exe'
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-$script:lastDump = (Get-Date).AddMinutes(-10)
+$script:lastDump = (Get-Date).AddMinutes(-10); $script:chatWarnSeen = $null
 $evd = Join-Path $root "ranked\logs\loop-$stamp"
 New-Item -ItemType Directory -Path $evd -Force | Out-Null
 $log = Join-Path $evd 'run.log'
@@ -59,7 +59,7 @@ foreach ($p in 7788,7789) {
 }
 
 $results = @()
-$matchNo = 0; $successCount = 0; $totalDeadline = (Get-Date).AddMinutes($MaxTotalMinutes)
+$matchNo = 0; $successCount = 0; $script:queueFails = 0; $streakFile = Join-Path $root 'ranked\logs\streak.json'; if (Test-Path $streakFile) { try { $sj = Get-Content $streakFile -Raw -Encoding UTF8 | ConvertFrom-Json; $successCount = [int]$sj.successCount; W ("resume consecutive streak {0}/{1}" -f $successCount, $Runs) } catch {} }; $totalDeadline = (Get-Date).AddMinutes($MaxTotalMinutes)
 $globalStalls = 0
 while ($successCount -lt $Runs -and (Get-Date) -lt $totalDeadline) {
   $matchNo++; $clientFault = $false
@@ -102,7 +102,7 @@ while ($successCount -lt $Runs -and (Get-Date) -lt $totalDeadline) {
     $raw = Get-Content $rawFile -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
     $cand = $null
     if ($raw -match '\{"address".*?\}') { try { $cand = $Matches[0] | ConvertFrom-Json } catch {} }
-    if (-not $cand -or -not $cand.password) { W ("queue attempt {0} failed raw=[{1}]" -f $q, ($raw -replace "\s+"," ")); Start-Sleep -Seconds 30; continue }
+    if (-not $cand -or -not $cand.password) { W ("queue attempt {0} failed raw=[{1}]" -f $q, ($raw -replace "\s+"," ")); $script:queueFails = 1 + [int]$script:queueFails; if ($script:queueFails -ge 8) { W ("MC API unreachable ({0} fails) -> pause 300s" -f $script:queueFails); Start-Sleep -Seconds 300; $script:queueFails = 0 } else { Start-Sleep -Seconds 45 }; continue }
     if ($cand.id -and [int]$cand.id -ne $Id) { W "ABORT: room id=$($cand.id) != $Id"; break }
     if ($cand.stale) { W 'stale room; wait 20s'; Start-Sleep -Seconds 20; continue }
     $room = $cand; break
@@ -137,7 +137,7 @@ while ($successCount -lt $Runs -and (Get-Date) -lt $totalDeadline) {
   W "policy pid=$($pol.Id)"
 
   # 5) deck + ready + start, screenshots every N sec, wait for the duel to start
-  $started = $false; $emptyTicks = 0; $noOpponent = $false; $startSends = 0
+  $started = $false; $noOpponent = $false; $startSends = 0; $emptySince = $null
   $nextShot = Get-Date
   $deckSent = $false
   $readySends = 0
@@ -179,7 +179,11 @@ while ($successCount -lt $Runs -and (Get-Date) -lt $totalDeadline) {
   else { W 'duel started' }
 
   # 6) monitor to the end of the match (Bo3: game2/game3 after side phase)
-  $deadline = $mStart.AddMinutes($MaxMinutesPerMatch)
+  # the per-match budget must start when the duel actually starts: queueing can take
+  # longer than the budget (e.g. 25 minutes in the morning), which used to make the
+  # monitor loop exit right after "duel started".
+  $deadline = (Get-Date).AddMinutes($MaxMinutesPerMatch)
+  if (-not $started) { $deadline = (Get-Date).AddSeconds(-1) }
   if ($noOpponent) { W "skip monitor (empty room)"; $deadline = (Get-Date).AddSeconds(-1) }
   $nextShot = Get-Date
   $lastSeq = -1; $lastProgress = Get-Date; $stallCount = 0; $script:prevWin = -1; $script:lastSig = ""
@@ -189,6 +193,26 @@ while ($successCount -lt $Runs -and (Get-Date) -lt $totalDeadline) {
     $s = St '7788'
     if (-not $s) { W 'client gone (control layer down)'; $matchOver = $true; break }
     if ((Get-Date) -ge $nextShot) { $nextShot = (Get-Date).AddSeconds($ShotEverySec); Shot "m$matchNo-live" }
+    # srvpro sends red chat warnings ("afk"/倒计时) before kicking an unresponsive player at ~90s.
+    # Catch them early: act if we can, otherwise surrender cleanly instead of eating an eof kick.
+    $chatRaw = JGet 'http://127.0.0.1:7788/chat'
+    if ($chatRaw -and ($chatRaw -match 'afk|AFK|请尽快|倒计时|警告|将视为|投降|超时')) {
+      if (-not $script:chatWarnSeen -or ((Get-Date) - $script:chatWarnSeen).TotalSeconds -gt 30) {
+        $script:chatWarnSeen = Get-Date
+        W ("CHAT-WARN detected: " + ($chatRaw.Substring(0,[Math]::Min(180,$chatRaw.Length))))
+        $a2 = JGet 'http://127.0.0.1:7788/actions'
+        $o2 = $null; try { $o2 = $a2 | ConvertFrom-Json } catch {}
+        if ($o2 -and $o2.actions -and $o2.actions.Count -gt 0) {
+          W ("CHAT-WARN acting -> act_id=" + $o2.actions[0].id)
+          $null = JGet ("http://127.0.0.1:7788/act_id?id=" + $o2.actions[0].id)
+        } elseif (((Get-Date) - $lastProgress).TotalSeconds -gt 50) {
+          W 'CHAT-WARN with no action available -> surrender to end cleanly'
+          try { $null = JPost 'http://127.0.0.1:7788/surrender' } catch {}
+          Start-Sleep -Seconds 3
+          $matchOver = $true; $clientFault = $false; break
+        }
+      }
+    }
     # server goes silent on an opponent that left: timeLeft stops ticking and no STOC arrives.
     # leave the room and take a new match instead of burning the whole budget.
     if (([int]$s.winPlayer -lt 0) -and -not $awaiting -and -not $s.sidePending -and -not $s.tpPending -and ((Get-Date) - $lastProgress).TotalSeconds -gt $SilentAbortSec) {
@@ -272,12 +296,12 @@ while ($successCount -lt $Runs -and (Get-Date) -lt $totalDeadline) {
     }
   }
   if ($duelEnded -and $gameNo -ge 2) {
-    $successCount++; W ("MATCH {0} COMPLETE ({1}/{2} consecutive bo3 done, games={3})" -f $matchNo, $successCount, $Runs, $gameNo)
+    $successCount++; try { (@{successCount=$successCount; updated=(Get-Date).ToString("o")} | ConvertTo-Json -Compress) | Set-Content -Path (Join-Path $root 'ranked\logs\streak.json') -Encoding UTF8 } catch {} ; W ("MATCH {0} COMPLETE ({1}/{2} consecutive bo3 done, games={3})" -f $matchNo, $successCount, $Runs, $gameNo)
   } elseif ($duelEnded) {
     W ("MATCH {0} ended after {1} game(s) (opponent left) -> external, streak kept at {2}" -f $matchNo, $gameNo, $successCount)
   } elseif ($clientFault) {
     W ("MATCH {0} aborted on OUR side -> streak reset (was {1})" -f $matchNo, $successCount)
-    $successCount = 0
+    $successCount = 0; try { (@{successCount=0; updated=(Get-Date).ToString("o")} | ConvertTo-Json -Compress) | Set-Content -Path (Join-Path $root 'ranked\logs\streak.json') -Encoding UTF8 } catch {}
   } else {
     W ("MATCH {0} aborted (external: silent opponent / empty room / network) -> streak kept at {1}" -f $matchNo, $successCount)
   }

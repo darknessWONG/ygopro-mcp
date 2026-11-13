@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // bridge/get-room.mjs - token -> authUser -> /ygopro/match, prints {"address":..,"port":..,"password":..,"name":..}
 // Reads the token from ranked/ls-copy (same logic as ranked/launcher.mjs). Prints JSON to stdout only.
+import https from 'node:https';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -31,13 +32,26 @@ async function authUser(token) {
   const r = await fetch('https://sapi.moecube.com:444/accounts/authUser', { headers: { authorization: 'Bearer ' + token }, signal: AbortSignal.timeout(15000) });
   return { status: r.status, json: await r.json().catch(() => null) };
 }
-async function match(name, secret, leave, timeoutMs = 20000) {
+async function match(name, secret, timeoutMs = 600000) {
   const basic = Buffer.from(`${name}:${secret}`).toString('base64');
-  const url = 'https://sapi.moecube.com:444/ygopro/match?arena=athletic&locale=zh-CN' + (leave ? '&cancel=1' : '');
-  const r = await fetch(url, {
-    method: 'POST', headers: { authorization: 'Basic ' + basic }, signal: AbortSignal.timeout(timeoutMs),
+  return await new Promise((resolve, reject) => {
+    const req = https.request({
+      host: 'sapi.moecube.com', port: 444,
+      path: '/ygopro/match?arena=athletic&locale=zh-CN', method: 'POST',
+      headers: { authorization: 'Basic ' + basic },
+    }, (res) => {
+      let data = '';
+      res.setEncoding('utf8');
+      res.on('data', (c) => { data += c; });
+      res.on('end', () => {
+        let json = null; try { json = JSON.parse(data); } catch {}
+        resolve({ status: res.statusCode, json });
+      });
+    });
+    req.setTimeout(timeoutMs, () => { req.destroy(new Error('match long-poll timeout')); });
+    req.on('error', (e) => reject(e));
+    req.end();
   });
-  return { status: r.status, json: await r.json().catch(() => null) };
 }
 
 (async () => {
@@ -56,14 +70,13 @@ async function match(name, secret, leave, timeoutMs = 20000) {
   if (wantId && Number(user.id) !== wantId) throw new Error(`authUser id ${user.id} != pinned ${wantId}`);
   if (!user.u16Secret) throw new Error('authUser has no u16Secret');
   let m = await match(user.name ?? user.username, user.u16Secret);
-  if (m.status === 409 || !m.json?.password) {
-    // 409 / empty answer = still queued or sitting in a previous room. The leave=1
-    // variant leaves it and queues again; give the server a few tries, it can be slow.
-    for (let t = 1; t <= 4 && (m.status === 409 || !m.json?.password); t++) {
-      process.stderr.write(`[get-room] match status=${m.status}, retry with leave=1 (${t}/4)\n`);
-      await new Promise((r) => setTimeout(r, 5000));
-      m = await match(user.name ?? user.username, user.u16Secret, true, 240000);
-    }
+  // /ygopro/match is a long poll: the server keeps the response queued until it can pair us.
+  // Aborting early drops our slot (the server removes us on close), and cancel=1 is not a
+  // real parameter (server ignores it), so wait on one long request instead of re-queueing.
+  if (m.status === 409) {
+    process.stderr.write('[get-room] match returned 409, retry in 5s\n');
+    await new Promise((r) => setTimeout(r, 5000));
+    m = await match(user.name ?? user.username, user.u16Secret, 600000);
   }
   if (!m.json?.password) throw new Error('match failed: ' + JSON.stringify(m));
   const out = { address: m.json.address, port: m.json.port, password: m.json.password, name: user.name ?? user.username, id: user.id };
