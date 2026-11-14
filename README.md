@@ -1,13 +1,13 @@
 # ygopro-mcp
 
-把 **YGOPro 客户端**接到 **MCP（Model Context Protocol）**：LLM / agent 通过 17 个 MCP 工具，
+把 **YGOPro 客户端**接到 **MCP（Model Context Protocol）**：LLM / agent 通过 18 个 MCP 工具，
 用「语义动作」打牌——不用拼 CTOS/STOC 二进制帧，也不需要用像素点屏幕。
 
 ```
    LLM / agent（MCP 宿主）
         │  MCP over stdio (JSON-RPC)
         ▼
-   bridge/mcp-server.mjs        薄桥：17 个工具 → HTTP
+   bridge/mcp-server.mjs        薄桥：18 个工具 → HTTP
         │  HTTP 127.0.0.1:7788（房主）/ 7789（客机）
         ▼
    带控制层的 YGOPro 客户端      进程内 HTTP server + 动作编码 + UI 注入
@@ -94,7 +94,7 @@ node doctor.mjs --client "C:\path\to\YGOPro.exe" --strict-build   # 发布自检
 
 | 路径 | 类别 | 作用 |
 |---|---|---|
-| `mcp-server.mjs` | runtime | MCP stdio server，17 个工具 → HTTP |
+| `mcp-server.mjs` | runtime | MCP stdio server，18 个工具 → HTTP |
 | `policy-semantic.mjs` | runtime | 参考策略（语义决策循环；可当 LLM 的替身） |
 | `supervisor.mjs` | runtime | 常驻监护：读 `/net` 判掉线；`--profile lan` 只记账，`--profile ranked` 重启客户端并重连+验证 |
 | `doctor.mjs` | ops | 自检（本文件） |
@@ -143,8 +143,9 @@ node doctor.mjs --client "C:\path\to\YGOPro.exe" --strict-build   # 发布自检
 
 | 文档 | 内容 |
 |---|---|
-| [docs/MATCH-PLAYBOOK.md](docs/MATCH-PLAYBOOK.md) | **对局操作手册（给 AI）**：排队/进房/选卡组/准备/**开始**/TP/决策/换备(side_ok)/下一局/收尾 的完整步骤与判定、异常处理 |
-| [`docs/MCP-INTERFACE.md`](docs/MCP-INTERFACE.md) | **接口规范（权威）**：17 个工具、所有 HTTP 端点、`/state`/`/prompt`/`/ui` 字段、`/actions` kind 全表、连锁语义、UI 注入设计、运行开关、排障 |
+| [**docs/PLAYBOOK-FULL.md**](docs/PLAYBOOK-FULL.md) | **全流程权威操作手册（给 AI/LLM，零歧义）**：系统架构、18 个工具逐个说明（参数/返回/适用/失败）、排队→进房→卡组→准备→开始→TP→决策→局末→换备→下一局→整场结束的每一步判定、状态字段字典、计时节奏、完整实战脚本 + 真实时间线、排错表、已知限制 |
+| [docs/MATCH-PLAYBOOK.md](docs/MATCH-PLAYBOOK.md) | **精简版操作手册（给 AI）**：一页速查；详细版见 `PLAYBOOK-FULL.md` |
+| [`docs/MCP-INTERFACE.md`](docs/MCP-INTERFACE.md) | **接口规范（权威）**：18 个工具、所有 HTTP 端点、`/state`/`/prompt`/`/ui` 字段、`/actions` kind 全表、连锁语义、UI 注入设计、运行开关、排障 |
 | [`docs/RECONNECT-DESIGN.md`](docs/RECONNECT-DESIGN.md) | 掉线/重连设计：`/net` 状态机、supervisor 职责、journal（`resume-context-<port>.json`）、探活参数 |
 | [`docs/supervisor.md`](docs/supervisor.md) | supervisor 用法、状态机、JSONL 字段 |
 | [`docs/direct-actions.md`](docs/direct-actions.md) | 哪些动作走 UI、哪些走直连、对 LLM 的影响、改进路线 |

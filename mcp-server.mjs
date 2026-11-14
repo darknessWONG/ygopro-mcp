@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 // bridge/mcp-server.mjs - MCP (stdio) server exposing the instrumented client's control API.
 //
-// Tools (17):
+// Tools (18):
 //   control_state        -> GET  /state  (whole match result is passed through as `match`; see control_match)
 //   control_match        -> GET  /state  -> {match, summary}   (one-line human-readable Bo3 result)
+//   control_prompt       -> GET  /prompt (current prompt snapshot, non-blocking)
 //   control_wait_prompt  -> GET  /wait_prompt?since&timeout_ms   (long poll, the main loop primitive)
 //   control_actions      -> GET  /actions
 //   control_act_id       -> GET  /act_id?id=N
@@ -211,6 +212,13 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
+    name: 'control_prompt',
+    description:
+      'Read the CURRENT prompt snapshot without waiting (GET /prompt): seq, awaiting, curMsg, the pending-decision counters (summonable/activatable/chains/...) and the semantic flags (tpPending / sidePending / canBp / canEp). ' +
+      'Use it to inspect "what is being asked right now"; use control_wait_prompt when you need to BLOCK until the next prompt arrives.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
     name: 'control_wait_prompt',
     description: 'Long-poll until it is this client\'s turn to respond. Returns the prompt: seq (pass it back to control_act), curMsg (what kind of decision), and candidate counters. This is the main agent loop primitive.',
     inputSchema: {
@@ -336,6 +344,7 @@ const TOOLS = [
 async function callTool(name, args) {
   switch (name) {
     case 'control_state': return http('/state');
+    case 'control_prompt': return http('/prompt');
     case 'control_match': {
       // Never throw for a dead/missing control layer: the MCP caller should get a readable summary either way.
       try {

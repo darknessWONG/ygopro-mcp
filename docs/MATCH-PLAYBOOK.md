@@ -1,6 +1,7 @@
 # 对局操作手册（给 AI / agent）
 
 > 这份文档回答一个问题：**一个 AI 要“亲手”在 YGOPro 客户端里打完一场排位/局域网 Bo3，按什么顺序调什么接口、每步等到什么状态才算成功、卡住了怎么办。**
+> **完整版（权威、零歧义）见 [`PLAYBOOK-FULL.md`](PLAYBOOK-FULL.md)**；本文是一页速查。
 > 接口字段细节见 [`MCP-INTERFACE.md`](MCP-INTERFACE.md)（MCP 工具层）与客户端仓库的 `docs/CONTROL-API.md`（HTTP 层）。
 > 参考实现：[`../ranked-loop.ps1`](../ranked-loop.ps1)（排位连续跑）、[`../bo3-run.ps1`](../bo3-run.ps1)（本机 Bo3）、[`../lan-run.ps1`](../lan-run.ps1)（局域网）。
 

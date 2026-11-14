@@ -1,6 +1,7 @@
 # YGOPro MCP 控制层：接口与设计规范（面向 LLM 接入）
 
 > **读者**：后续接手的 LLM / agent / 工程师。**只读本文档 + 附录即可接入**，不需要先读懂 ygopro 协议。
+> **先读（操作流程）**：[`PLAYBOOK-FULL.md`](PLAYBOOK-FULL.md) —— 全流程权威操作手册（每步判定/工具速查/状态字典/排错）；本文档是字段与接口契约。
 >
 > **适用版本（当前正式版 exe）**：`mycard-client/bin/release/x64/YGOPro.exe`
 > = **2026-11-13 14:51:46 / 6,319,104 B**，SHA256 `CDB25977ED3A568D724B90B738595CAB1B7ED8F2C870939E9461944C925DE2FC`
@@ -53,7 +54,7 @@
         └───────────┬────────────┘
                     │ MCP (stdio, JSON-RPC)
         ┌───────────▼────────────┐
-        │ bridge/mcp-server.mjs  │   薄桥：17 个工具 → HTTP
+        │ bridge/mcp-server.mjs  │   薄桥：18 个工具 → HTTP
         └───────────┬────────────┘
                     │ HTTP 127.0.0.1:7788（房主）/ 7789（客人）
         ┌───────────▼───────────────────────────────────────┐
@@ -102,7 +103,7 @@
 
 ---
 
-## 2. MCP 工具清单（`bridge/mcp-server.mjs` 的 17 个工具）
+## 2. MCP 工具清单（`bridge/mcp-server.mjs` 的 18 个工具）
 
 > 全部无参数或只有简单参数；返回体就是对应 HTTP 端点的 JSON（原文透传，见 §4）。**例外**：`control_match` 返回派生的 `{match, summary}`（见 §5.6）。
 
@@ -125,6 +126,7 @@
 | 15 | `control_side_move` | **Bo3 换备**：把 N 张卡在 side/main/extra 之间移动（详见 §5.5） | `code`(number，卡号)、`from`(side\|main\|extra)、`to`(main\|extra\|side)、`n`(默认 1) | `POST /side_swap?code&from&to&n` |
 | 16 | `control_side_done` | **Bo3 换备**：换完牌点"确定"继续下一局（等价 `btnSideOK`） | — | 先 `GET /actions` 找 `kind=side_ok` 的 id，再 `GET /act_id?id=` |
 | 17 | `control_match` | **整场结果一句话**（谁赢/为什么/大比分/是否结束，详见 §5.6） | — | `GET /state`，读 `state.match` 派生 |
+| 18 | `control_prompt` | **当前 prompt 快照（不阻塞）**：seq/awaiting/curMsg/tpPending/sidePending/候选计数 | — | `GET /prompt` |
 
 **MCP 连接示例（JSON-RPC over stdio）**
 
