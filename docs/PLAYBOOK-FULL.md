@@ -309,7 +309,7 @@ control_act({ seq: <当前 seq>, hex: "000201" })
 - **旧 exe 仍需降级**：不要重试同一目标；改选 **直接攻击**（若可选）或 **`to_m2`/`end_battle`/`to_ep`** 结束战斗阶段。
 - 判定修复后正常：`/state.curMsg` 不再 15↔10 交替、`retryStreak` 不涨、攻击正常结算。
 
-#### 3.7.3 `announce` 140–143（race/attrib/card/number）——**已修复（20:11:00 版），待 bot-scout 最终复验**
+#### 3.7.3 `announce` 140–143（race/attrib/card/number）——**已修复（20:11:00 版），已实机验证**
 
 - **旧版本现象**：`curMsg` 到 143（`MSG_ANNOUNCE_NUMBER`）之前会 `awaiting=false` 卡住——announce prompt 没被发布，LLM 拿不到决策点。
 - **20:11:00 版修复**：`kPromptMsgs` 纳入 `MSG_ANNOUNCE_RACE(140)` / `ATTRIB(141)` / `CARD(142)` / `NUMBER(143)`；`/prompt.announceNumberValues` 暴露 NUMBER 的可用数值；`/actions` 提供 `announce_race` / `announce_attrib` / `announce_card` / `announce_number`。
@@ -321,7 +321,7 @@ control_act({ seq: <当前 seq>, hex: "000201" })
   | `announce_card` | 卡号（passcode） |
   | `announce_number` | **数值本身**（不是下标；候选见 `/prompt.announceNumberValues`） |
 - 判定成功：动作后 `seq` 前进、`curMsg` 离开 143、`awaiting` 变化；无 `MSG_RETRY`。
-- 状态：**待 bot-scout 最终复验**（PASS 后本节标"已实机验证"）。
+- 状态：**已实机验证**（`ANNOUNCE number values=5` → `SEND RESPONSE realMsg=143 i=1` → `firstid=25(SORT_CARD)` 前进、无 RETRY、无卡住）。
 
 ### 3.8 一局结束
 
@@ -743,7 +743,7 @@ YGO_CONTROL_PORT=7789 YGO_TP=2 YGO_SIDE_AUTO=1 .\YGOPro.exe -h 127.0.0.1 -p 7911
 11. **多怪兽攻击目标——已修复（19:05:42 起，20:11:00 含）**：旧 exe 在 `MSG_SELECT_BATTLECMD` 的攻击目标选择会被内核拒绝（`curMsg` 15↔10 反复、攻击消耗不结算）；当前版已修复（LAN 实机 PASS）。旧 exe 仍降级：直接攻击/`to_m2`/`end_battle`/`to_ep`（见 §3.7.2）。
 12. **TP 自动应答（19:05:42 版起）**：控制驱动下默认 ~2s 自动答**后攻（`res=2`）**（`YGO_TP_AUTO`/`YGO_TP_AUTO_RES`，`YGO_TP_AUTO_RES=1` 可改先攻）；要人工覆盖必须 2s 内，13s 是服务端硬上限（见 §3.6 / §0.1）。
 13. **`MSG_SORT_CARD`——已实机验证（20:11:00 版）**：裸位序字节无前缀（`realMsg=25 len=3 hex=000102`），改直连字节、不再 UI fallback（`UI skip sort -> direct bytes`）。
-14. **announce 140–143——已修复（20:11:00 版），待 bot-scout 最终复验**：见 §3.7.3；通过后本节标"已实机验证"。
+14. **announce 140–143——已修复（20:11:00 版），已实机验证**：见 §3.7.3。
 14. **判死阈值**：当前版默认 60s + 我方回合/倒计时在走不判死（`NET ALIVE reason=our-turn-idle`）；旧 exe 仍是 10s，必须设 `YGO_NET_DEAD_SILENCE_MS=600000`。
 
 ---

@@ -197,6 +197,6 @@
    - 现象：旧版 `curMsg=143` 之前会 `awaiting=false` 卡住（announce prompt 未发布）。
    - 修复：`kPromptMsgs` 纳入 `MSG_ANNOUNCE_RACE(140)/ATTRIB(141)/CARD(142)/NUMBER(143)`；`/prompt.announceNumberValues` 暴露 NUMBER 可用数值；`/actions` 提供 `announce_number` / `announce_race` / `announce_attrib` / `announce_card`。
    - 编码：**number=数值本身、race/attrib=掩码、card=卡号**（不是下标）。
-   - 状态：**待 bot-scout 最终复验**（通过后本节标"已实机验证"，全部修复即全绿）。
+   - 状态：**已实机验证**（`ANNOUNCE number values=5` → `realMsg=143 i=1` → 下一 prompt `firstid=25(SORT_CARD)` 前进；无 RETRY/卡住）。全部 5 项修复已全绿。
 
 > 文档联动：`PLAYBOOK-FULL.md` §3.7.1（sort 已实机 `hex=000102`）、§3.7.2（攻击目标已修复）、**§3.7.3（announce 140–143）**、§0.1/§6.1（TP 自动/判死默认 60s）、§8（`curMsg=143` 排错）。
