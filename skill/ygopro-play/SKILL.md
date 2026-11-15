@@ -16,8 +16,9 @@ description: 用 MCP 控制层真实操作 YGOPro 客户端打牌（MC 线上排
 2. **启动必须设** `YGO_NET_DEAD_SILENCE_MS=600000`：否则 10s 静默会把"自己回合思考中"误判 `confirmed_dead` → 提示管线冻结 → 被踢（新 exe 已默认 60s 且我方回合不判死，但仍建议显式设）。
 3. **MSG_SORT_CARD（洗牌/排序）响应是裸位序字节、无长度前缀**：两张卡保持原序 = `hex="0001"`；用 `control_act({seq, hex})`，**不要**加计数前缀（会死循环）。
 4. **多怪兽攻击目标**：旧版会核心拒绝（`curMsg` 15↔10 反复、攻击消耗但不结算）；新 exe 已修（见 PLAYBOOK-FULL §3.7.2），若仍遇到就降级：直接攻击 / `to_m2` / `end_battle`。
-5. **`awaiting=false` 不发动作**；同一条 prompt 只回一次（`seq` 去重）；`/act_id` 带 `seq=` 防过期。
-6. **整场胜负只信 `control_match`**，不要用 `winPlayer` 推。
+5. **announce 140–143**：旧版 `curMsg=143` 前会 `awaiting=false` 卡住；新 exe（20:11:00+）`/actions` 提供 `announce_race/announce_attrib/announce_card/announce_number`，编码 **race/attrib=掩码、card=卡号、number=数值本身**（候选见 `/prompt.announceNumberValues`）。
+6. **`awaiting=false` 不发动作**；同一条 prompt 只回一次（`seq` 去重）；`/act_id` 带 `seq=` 防过期。
+7. **整场胜负只信 `control_match`**，不要用 `winPlayer` 推。
 
 ## 1. 先确认可用（30 秒）
 
@@ -57,7 +58,7 @@ while not state.match.over:
 
 选动作：`yesno` 按收益；`option` 按效果；`card/place` 用 prompt 里的 `selectableCards/placeOptions`（旧版 select 有攻击目标 bug，新 exe 已修）；`chain` 有反制才链；`position` 按场面；`idlecmd` 展开/结束；`side_ok` 见第 2 节第 9 步；`tp` 必须快。
 
-**特殊响应**：`MSG_SORT_CARD` 用裸字节（`hex="0001"` 保持原序、无前缀）；`MSG_SELECT_PLACE` 用 `(ctrl,loc,seq)` 三字节。
+**特殊响应**：`MSG_SORT_CARD` 用裸字节（`hex="0001"` 保持原序、无前缀；20:11:00 已实机验证 `hex=000102` 直连字节）；`MSG_SELECT_PLACE` 用 `(ctrl,loc,seq)` 三字节；`announce_*`（140–143）的 `announce_number` 响应=**数值本身**（不是下标，候选见 `/prompt.announceNumberValues`），`announce_race/attrib`=掩码、`announce_card`=卡号。
 
 ## 4. 结果汇报
 
@@ -84,7 +85,8 @@ while not state.match.over:
 | 卡 `STOC_CHANGE_SIDE` | `state.side.pending` | 两侧 `control_side_done` |
 | `side_ok` 报 `counts must match` | 换备不守恒 | 换回等量再 done |
 | 攻击目标提交无效（旧版） | `curMsg` 15↔10 反复 | 升级 exe；否则降级直接攻击/to_m2/end_battle |
-| 排序 prompt 死循环 | `curMsg==25` 反复 | `control_act({seq, hex:"0001"})` 裸字节重发 |
+| 排序 prompt 死循环 | `curMsg==25` 反复 | `control_act({seq, hex:"0001"})` 裸字节重发；20:11:00 已改直连字节 |
+| 卡在 `curMsg==143`、`awaiting=false` | 旧版 announce prompt 未发布 | 升级 20:11:00+；用 `/actions` 的 `announce_number`（数值本身）/`announce_race/attrib/card` |
 | `stale action id` | `/act_id` 的 seq 旧了 | 重新 `control_actions` 再发 |
 | `confirmed_dead` 误判 | 我方回合思考>10s | 设 `YGO_NET_DEAD_SILENCE_MS=600000`（新 exe 默认已修） |
 | MC API 连续超时 8 次 | 排队失败 | 停 5 分钟再试 |

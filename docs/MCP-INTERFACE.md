@@ -4,8 +4,8 @@
 > **先读（操作流程）**：[`PLAYBOOK-FULL.md`](PLAYBOOK-FULL.md) —— 全流程权威操作手册（每步判定/工具速查/状态字典/排错）；本文档是字段与接口契约。
 >
 > **适用版本（当前正式版 exe）**：`mycard-client/bin/release/x64/YGOPro.exe`
-> = **2026-11-15 19:05:42 / 6,321,152 B**，SHA256 `82B961D13A011BC4413E7824C4CDC3C6239582ABCF5B094DB9669F29E684F664`
-> （2026-11-15 真实 LLM 反馈修复版：战斗攻击目标修复（15↔10 循环/LP 不结算）+ TP 默认 2s 自动答（`YGO_TP_AUTO`/`YGO_TP_AUTO_RES`，**默认 `res=2`=后攻**，可配 1=先攻）+ 判死误杀修复（默认 60s、我方回合/倒计时在走不判死、`NET ALIVE reason=our-turn-idle`；旧 exe 仍需 `YGO_NET_DEAD_SILENCE_MS=600000`）+ `MSG_SORT_CARD` 裸位序字节无前缀（已实现，待 LAN 实机触发验证）；另含前版的 Bo3 换备/`/state.match`/`/start` latch/`STOC_REPLAY` 跳过；验收/历史版本见文末记录）
+> = **2026-11-15 20:11:00 / 6,323,712 B**，SHA256 `32AF716D5A013B40C4337DE3CA873C78F00A693065D7D01A6CF8FBC2089E9520`
+> （2026-11-15 **最终版**：`MSG_SORT_CARD` 已实机验证（`hex=000102`，裸位序无前缀，改为直连字节、`UI skip sort -> direct bytes`）+ **announce 140–143 修复**（`/prompt.announceNumberValues`；`/actions` 的 `announce_number/announce_race/announce_attrib/announce_card`；number=数值、race/attrib=掩码、card=卡号）+ 战斗攻击目标修复 + TP 默认 2s 自动答（`YGO_TP_AUTO`/`YGO_TP_AUTO_RES`，默认 `res=2`=后攻）+ 判死 60s/我方回合不判死；另含 Bo3 换备/`/state.match`/`STOC_REPLAY` 跳过；验收/历史见文末记录）
 > `/state.resume.reason` 在加载成功时返回 `"loaded"`，行为不变；22:23:28 已做过冒烟）。
 > 该版含重连基础能力：`GET /net`、自动 `/tip` 探活、`YGO_SUPPRESS_MODALS` 模态框抑制、
 > `resume-context-<port>.json` journal、`POST /leave`（详见 [RECONNECT-DESIGN.md](RECONNECT-DESIGN.md)、[reconnect-lab.md](reconnect-lab.md)）。
@@ -314,6 +314,7 @@ body = PromptJson(g_shared);
 | `chainForced` | 连锁是否被迫（`canDecline` 的来源） |
 | `lastChain` | 是否处于连锁中 |
 | `selectMin` / `selectMax` / `selectCancelable` / `selectableCount` | 选卡 min/max、可否取消、可选张数 |
+| `announceNumberValues` | **仅 `MSG_ANNOUNCE_NUMBER(143)` 时出现**：可用数值列表（int32）；`/actions` 为每个值给一条 `kind:"announce_number"`，选中后响应 = **数值本身**（不是下标） |
 | `canBp` / `canEp` | 可否进战阶 / 可否结束阶段 |
 | `sumTarget` / `sumMode` | 素材合计目标值 / 合计方式（用于 `MSG_SELECT_SUM`） |
 | `isFirst` / `placeCoords` | 是否先手 / 当前选格坐标口径（`server`\|`local`） |
@@ -413,8 +414,8 @@ body = PromptJson(g_shared);
 | `place` | `MSG_SELECT_PLACE`(18)/`MSG_SELECT_DISFIELD`(24) | `place bit=8 mask=0 ctrl=1 p0=1 seat=1 first=0 loc=8 seq=0` | index=places 下标；4 变体自愈（`placeVariant`） |
 | `sum` | `MSG_SELECT_SUM`(23) | `auto-select materials` | 自动选素材 |
 | `counter` | `MSG_SELECT_COUNTER`(22) | `auto-place counters` | 自动放指示物 |
-| `sort` | `MSG_SORT_CARD`(25) | `keep current order` | 保持当前顺序 |
-| `announce` | `MSG_ANNOUNCE_RACE/ATTRIB/NUMBER/CARD` | `auto announce (first option)` | 自动选第一项 |
+| `sort` | `MSG_SORT_CARD`(25) | `keep current order` | 保持当前顺序（响应 = **裸位序字节、无长度前缀**，如 `hex=0001`；`20:11:00` 版起改直连字节、不再 UI fallback） |
+| `announce_race` / `announce_attrib` / `announce_card` / `announce_number` | `MSG_ANNOUNCE_RACE(140)` / `ATTRIB(141)` / `CARD(142)` / `NUMBER(143)` | `announce race xxx` / `number 1000` 等 | 编码：**race/attrib=掩码、card=卡号、number=数值本身**（不是下标）；number 的候选见 `/prompt.announceNumberValues` |
 | `auto` | 其它（如 `MSG_HINT`/`MSG_CONFIRM_*` 等） | `auto / safe default` | 安全默认（回 0 或空） |
 
 **要点**
@@ -840,7 +841,7 @@ $env:YGO_UI_ACTIONS='0'; powershell ... bridge\lan-run.ps1 -Games 1
 5. **链字段有 1 帧延迟**：`/state` 与 `/prompt` 的链字段来自 UI 线程快照；`chainStack[].forced` 恒 false、`type` 固定 `effect`。
 6. **UI 模式个别动作有 600ms 校验延迟**（点不中时才会走满）。
 7. **多效果卡默认点第 0 个 option**（可能不是最优效果）；`announce/counter/sort/sum` 是"安全默认"而非最优。
-8. **线上排位：能完整打完，但胜率依赖策略**：客户端/管线侧已实测可拿房→进房→选卡组→准备→完整对局→自然结算（LP_ZERO 等），并支持受控掉线后约 13s 重连回同房继续打；输局主要是 policy 保守（大量 `decline`/`to_bp`/`end`），不是管线卡死。**排位相关新字段（`/state.deckError`、`/state.isWin/isLoss/isDraw`、`/state.lpOrder`、`/state.pipeline.recentMsgs`、`/state.tpPending`+`/state.tpOptions`、`/actions` 的先/后攻动作 `kind:"tp"`+`index:1|2`、`/state.sidePending`、`/actions` 的换备牌动作 `kind:"side_ok"`（Bo3 每局之间，`id=0` → `btnSideOK`/`SendUpdateDeck`）、**`/state.side`（`available/pending/waiting/elapsedMs/waitingSeen/lastWaitMs/main/extra/side/counts/pre/limits/error`）+ `POST /side_swap`（真正换牌）+ `side_ok` 竞态修复**、**`/state.match`（`game`/`over`/`games[]`（含 `win`/`winnerSeat`/`reasonName`）/`gamesWonLocal`/`gamesWonOpp`/`lastWinnerLocal`/`lastReasonName`，配合 `control_match` 一句话报结果）**、`CHAIN raw` 等；Bo3 Game2/3 开局客户端会 `DUEL_START reset result state` 重置 `winPlayer/winReason`）只在客户端 `2026-11-15 19:05:42 / 6,321,152 B`（sha256 `82B961D13A011BC4413E7824C4CDC3C6239582ABCF5B094DB9669F29E684F664`）及之后存在**；旧 exe 请先升级。详见 [`RANKED-REPORT.md`](RANKED-REPORT.md)。
+8. **线上排位：能完整打完，但胜率依赖策略**：客户端/管线侧已实测可拿房→进房→选卡组→准备→完整对局→自然结算（LP_ZERO 等），并支持受控掉线后约 13s 重连回同房继续打；输局主要是 policy 保守（大量 `decline`/`to_bp`/`end`），不是管线卡死。**排位相关新字段（`/state.deckError`、`/state.isWin/isLoss/isDraw`、`/state.lpOrder`、`/state.pipeline.recentMsgs`、`/state.tpPending`+`/state.tpOptions`、`/actions` 的先/后攻动作 `kind:"tp"`+`index:1|2`、`/state.sidePending`、`/actions` 的换备牌动作 `kind:"side_ok"`（Bo3 每局之间，`id=0` → `btnSideOK`/`SendUpdateDeck`）、**`/state.side`（`available/pending/waiting/elapsedMs/waitingSeen/lastWaitMs/main/extra/side/counts/pre/limits/error`）+ `POST /side_swap`（真正换牌）+ `side_ok` 竞态修复**、**`/state.match`（`game`/`over`/`games[]`（含 `win`/`winnerSeat`/`reasonName`）/`gamesWonLocal`/`gamesWonOpp`/`lastWinnerLocal`/`lastReasonName`，配合 `control_match` 一句话报结果）**、`CHAIN raw` 等；Bo3 Game2/3 开局客户端会 `DUEL_START reset result state` 重置 `winPlayer/winReason`）只在客户端 `2026-11-15 20:11:00 / 6,323,712 B`（sha256 `32AF716D5A013B40C4337DE3CA873C78F00A693065D7D01A6CF8FBC2089E9520`）及之后存在**；旧 exe 请先升级。详见 [`RANKED-REPORT.md`](RANKED-REPORT.md)。
 9. **被动判死（对手回合 60s eff + `NET silence diag`）**：对手长时间不出手时，客户端会按"对手回合 60s eff"推进判定，并在 `/net` 相关日志打 `NET silence diag`（链路静默诊断，不主动断线）；被动判死不是本仓库 policy 的行为，属客户端/服务端规则。`/net` 的 `alive`/`sinceLastStoc` 在静默期会持续增长——要区分"对手在思考（slow play）"和"对手掉线"，以 `NET silence diag` + `/net.probe` 的 `fails`/`rttMs` 判断；详见 `mycard-client/docs/CONTROL-API.md` 的 `/net` 一节。
 10. **控制驱动下 `STOC_REPLAY` 直接跳过（`replay: dialog skipped`）**：不会弹回放对话框、**不阻塞网络线程**（否则回放保存框会卡住后续 STOC）。**已 LAN 实测**（2026-11-13：双方各 2 次 `replay: dialog skipped (control-driven, no wait)`、`replay-save=0`、`stoc=23 stall=0`）；排位 LP_ZERO 结算场景同样走该路径（不再需要"未实测"假设）。若上线后出现结算后收不到后续包，先查这里。
 

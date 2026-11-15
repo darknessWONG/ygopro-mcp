@@ -175,9 +175,9 @@
 
 ---
 
-## 10. 2026-11-15 真实 LLM 使用反馈修复（客户端 `19:05:42 / 6,321,152 B`）
+## 10. 2026-11-15 真实 LLM 使用反馈修复（最终版 `20:11:00 / 6,323,712 B`）
 
-真实 LLM 通过 MCP 打排位时反馈 4 个问题，poc 已修复前三项（第 4 项已实现、待 LAN 实机触发验证）：
+真实 LLM 通过 MCP 打排位时反馈 4 个问题；`19:05:42` 版修前 3 项，`20:11:00` 最终版补上 sort 直连 + announce 修复：
 
 1. **战斗选攻击目标（已修复）**
    - 现象：旧版多怪兽选攻击目标时 `curMsg` 在 **15↔10** 反复、攻击消耗不结算（内核拒绝目标选择）。
@@ -190,8 +190,13 @@
 3. **判死误杀（已修复）**
    - 旧版：`YGO_NET_DEAD_SILENCE_MS` 默认 10s，自己回合思考会被误判 `confirmed_dead` → 提示管线冻结 → 被踢。
    - 修复：默认阈值改为 **60s**，且**我方回合/倒计时在走时不判死**（日志 `NET ALIVE reason=our-turn-idle`）；实机 40s 思考无 `NET DEAD`。旧 exe 仍建议显式设 `YGO_NET_DEAD_SILENCE_MS=600000`。
-4. **`MSG_SORT_CARD` 响应格式（已实现、待实机验证）**
+4. **`MSG_SORT_CARD` 响应格式（已实机验证）**
    - 响应是**裸位序字节、无长度前缀**：两张卡保持原序 = `hex=0001`；带前缀会死循环。
-   - 已在 19:05:42 版实现；LAN 实机触发验证进行中（bot-scout 用 `sort-test.ydk`），通过后本节改为"已实机验证"。
+   - `20:11:00` 版：**已实机验证** —— `realMsg=25 len=3 hex=000102`（裸字节、无前缀），prompt 正常前进、无 `RETRY`；并改为**直连字节**、不再走 UI fallback（日志 `UI skip sort -> direct bytes`）。
+5. **announce 140–143（新增修复，最终版）**
+   - 现象：旧版 `curMsg=143` 之前会 `awaiting=false` 卡住（announce prompt 未发布）。
+   - 修复：`kPromptMsgs` 纳入 `MSG_ANNOUNCE_RACE(140)/ATTRIB(141)/CARD(142)/NUMBER(143)`；`/prompt.announceNumberValues` 暴露 NUMBER 可用数值；`/actions` 提供 `announce_number` / `announce_race` / `announce_attrib` / `announce_card`。
+   - 编码：**number=数值本身、race/attrib=掩码、card=卡号**（不是下标）。
+   - 状态：**待 bot-scout 最终复验**（通过后本节标"已实机验证"，全部修复即全绿）。
 
-> 文档联动：`PLAYBOOK-FULL.md` §3.7.2（攻击目标改为"已修复（19:05:42 版）"）、§3.7.1（sort 已实现，待实机）、§0.1/§6.1（TP 自动/判死默认 60s）。
+> 文档联动：`PLAYBOOK-FULL.md` §3.7.1（sort 已实机 `hex=000102`）、§3.7.2（攻击目标已修复）、**§3.7.3（announce 140–143）**、§0.1/§6.1（TP 自动/判死默认 60s）、§8（`curMsg=143` 排错）。
