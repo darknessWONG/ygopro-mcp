@@ -15,6 +15,12 @@ description: 用 MCP 控制层真实操作 YGOPro 客户端打牌（MC 线上排
 1. MCP 工具里应能看到 `control_*` 共 **18** 个：`control_state`、`control_match`、`control_prompt`、`control_wait_prompt`、`control_act`、`control_ready`、`control_actions`、`control_act_id`、`control_lobby`、`control_deck`、`control_start`、`control_surrender`、`control_chat`、`control_join`、`control_msg`、`control_health`、`control_side_move`、`control_side_done`。
 2. `control_health` → `{"ok":true,...}` 说明客户端控制层在跑（host 端口 7788，guest 7789）。
 3. 没起来：让用户启动，或按第 6.1 用脚本起客户端（`$ROOT\bridge\ranked-loop.ps1` / `bo3-run.ps1`）。
+4. **启动客户端前必须设 `YGO_NET_DEAD_SILENCE_MS=600000`**（旧 exe；默认 10s 静默会把"自己回合思考"误判成 `confirmed_dead` → 提示管线冻结 → 被服务端踢。新 exe 已改默认并在我方回合/时间在走时不判死，但两版都建议显式设 600000）。
+
+> **最高优先级硬规则（违反=丢房）**
+> - **TP 13 秒铁律**：`STOC_SELECT_TP` 出现后 **13s 内必须答先/后攻**，否则服务端直接 `eof` 踢人（LLM 实测连丢两个房）。新 exe 默认 ~2s 自动答先攻；人工覆盖必须 2s 内。
+> - **`MSG_SORT_CARD` 响应用裸位序字节、无长度前缀**：两张保持原序 = `hex=0001`；带前缀会死循环。
+> - **多怪兽攻击目标（旧 exe 已知 bug，修复中）**：`curMsg` 15↔10 反复、攻击不结算 → 降级为直接攻击 / `to_m2` / `end_battle` / `to_ep`。
 
 > 只读查询永远安全：`control_state` / `control_prompt` / `control_lobby` / `control_actions` / `control_match` / `control_chat` / `control_msg` / `control_health`。阻塞等待下一条 prompt 用 `control_wait_prompt(since=上一个 seq)`。会动 UI 的：`control_join` / `control_deck` / `control_ready` / `control_start` / `control_act_id` / `control_side_move` / `control_side_done` / `control_surrender`。
 
@@ -27,7 +33,7 @@ description: 用 MCP 控制层真实操作 YGOPro 客户端打牌（MC 线上排
 | 3 | 选卡组 | `control_deck(name)` | `control_lobby.deckMain>0` 或日志 `deck: load ... ok=1` | 卡组名不存在 → 列出 `$ROOT\mycard-bot\game\deck\*.ydk` 让用户选 |
 | 4 | 准备 | `control_ready()` | `control_lobby.ready[mySeat]==1` | 1–2s 一次、可无限重试（准备窗未建好会吞点击） |
 | 5 | **开始** | `control_start()` | `control_state.started==true` | **双方 ready 不会自动开局**；2–3s 一次直到 started，最多 30 次 |
-| 6 | 先/后攻 | `control_state().prompt.tpPending` 或 `control_actions` 里 `kind:"tp"` → `control_act_id(id)` | 日志 `TP choice res=1/2`、随后 `state.started=true` | 不选会卡在 `STOC_SELECT_TP` |
+| 6 | 先/后攻 | `control_state().prompt.tpPending` 或 `control_actions` 里 `kind:"tp"` → `control_act_id(id)` | 日志 `TP choice res=1/2`、随后 `state.started=true` | **13s 硬上限**：超时服务端直接 `eof`；新 exe 默认 ~2s 自动答先攻（人工覆盖 <2s） |
 | 7 | 对局决策 | 见第 2 节循环（`control_prompt`/`control_wait_prompt` → `control_actions` → `control_act_id`） | 每次动作后 `prompt.seq` 增长、`awaiting` 变化 | `awaiting=false` 时**不要**发动作；同一条 prompt 只回一次（`seq` 去重） |
 | 8 | 一局结束 | 等 `state.winPlayer>=0` 或 `state.match.games` 多一条 | `control_match.match.games[].reasonName` | 立刻调 `control_match` 向用户报告本局结果 |
 | 9 | 换备（Bo3） | `control_state.side.pending==true` → （可选 `control_side_move`）→ `control_side_done()` | 日志 `SIDE ok clicked`；之后 `state.match.game` 变 2 | 两侧都必须 side_ok；张数不一致会被拒（`counts must match`），换回等量 |
@@ -59,7 +65,11 @@ while 对局没结束:
 - `kind:"position"`：攻/守/里侧；按场面选。
 - `kind:"idlecmd"`：主阶段行动（召唤/发效果/进战阶/结束）；优先做能赢的展开。
 - `kind:"side_ok"`：换备完成，见第 1 节第 9 步。
-- `kind:"tp"`：先后攻，`index=1` 先攻 / `index=2` 后攻（按 `id` 传）。
+- `kind:"tp"`：先后攻，`index=1` 先攻 / `index=2` 后攻（按 `id` 传）；**13s 硬上限，收到即答**。
+
+**两个特殊响应格式**：
+- **`MSG_SORT_CARD`（洗牌/排序）**：裸位序字节、**无长度前缀**——两张保持原序 = `control_act({seq, hex:"0001"})`；带前缀会死循环（`retryStreak` 涨、`curMsg` 不变）。
+- **多怪兽攻击目标（旧 exe 已知 bug，修复中）**：选目标时 `curMsg` 15↔10 反复、攻击不结算 → 降级为直接攻击 / `to_m2` / `end_battle` / `to_ep`，不要连续重试。
 
 **不要做**：
 - 不要凭 `winPlayer` 猜整场结果 → 用 `control_match`。
@@ -88,7 +98,11 @@ while 对局没结束:
 | 进房后 35s 没人来 | `control_lobby.playerCount<2` | 离开重排（线上）；规则：**35 秒没人进房就退出重排** |
 | 对手回合长时间无包 | `state.turnPlayerLocal!=0` 且 `net.sinceLastStoc` 持续增长、`timeLeft` 冻结 | 180s 后离开重排；不要一直等 |
 | `net.closeReason=="eof"` | 服务端主动断开 | 本场作废（外部原因），重排；连续 eof 检查是否我们发了非法动作（看客户端日志 `SEND RESPONSE realMsg=`） |
-| 卡在 `STOC_SELECT_TP` | `state.prompt.tpPending` | 调 `control_act_id` 选先后攻 |
+| 卡在 `STOC_SELECT_TP` | `state.prompt.tpPending` | **13s 内必须答**（超时 `eof` 踢人）：`control_act_id` 选先后攻；新 exe 默认 ~2s 自动先攻 |
+| **`tpPending` 后突然 `eof`** | 服务端 TP 超时 | 下次收到 TP 立即答；人工覆盖 <2s（新 exe 自动） |
+| **`/net.state=="confirmed_dead"`、提示管线冻结** | `YGO_NET_DEAD_SILENCE_MS` 默认 10s 误判（自己回合思考中） | **启动客户端必须设 `YGO_NET_DEAD_SILENCE_MS=600000`**；新 exe 已改默认+我方回合不判死 |
+| **`sort` 响应死循环（`retryStreak` 涨、`curMsg` 不变）** | 响应带了长度前缀 | 改裸位序字节：`control_act({seq, hex:"0001"})`（无前缀） |
+| **多怪兽攻击目标选不了（`curMsg` 15↔10 反复）** | 旧 exe 战斗目标 bug（修复中） | 降级：直接攻击 / `to_m2` / `end_battle` / `to_ep` |
 | 卡在 `STOC_CHANGE_SIDE` | `state.side.pending` | 两侧 `control_side_done` |
 | `side_ok` 返回 `counts must match` | 换备张数不守恒 | 换回等量（`control_side_move` 反向）再 done |
 | 动作没生效 / `seq` 不涨 | `/prompt` 仍是同一 prompt | 等 300ms 重发一次；两次无效则查 `/ui.windowsVisible` 是否被弹窗挡住 |
@@ -102,10 +116,13 @@ while 对局没结束:
 
 ```powershell
 cd $ROOT
+$env:YGO_NET_DEAD_SILENCE_MS = '600000'   # 旧 exe 必设：防 confirmed_dead 误判（新 exe 也建议）
 powershell -NoProfile -ExecutionPolicy Bypass -File bridge\ranked-loop.ps1 `
   -Runs 3 -MaxMinutesPerMatch 25 -MaxTotalMinutes 240 -Deck <卡组> `
   -ShotEverySec 10 -StallSec 120 -SilentAbortSec 180 -EmptyRoomSec 35
 ```
+
+> 客户端是 `ranked-loop.ps1` 启动的，所以 env 必须在**调用该脚本的这个 shell** 里设（脚本会继承给客户端进程）。手动启动客户端同样要设。`YGO_TP=1/2`、`YGO_SIDE_AUTO=1` 只在 LAN 测试用，**排位不要设**。
 
 - 连击进度持久化在 `$ROOT\ranked\logs\streak.json`，重启会 `resume consecutive streak N/M`
 - 证据/截图：`$ROOT\ranked\logs\loop-<stamp>\`（`run.log`、`summary.json`、`shots/`、每场 `match.json`）
