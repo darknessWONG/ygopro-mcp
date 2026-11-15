@@ -55,7 +55,7 @@ GET /act_id?id=1     # 后攻（index=2）
 ```
 
 - **13 秒铁律**：`STOC_SELECT_TP` 出现后 13s 内必须答，否则服务端直接 `eof` 踢人（LLM 实测连丢两个房）。
-- **新 exe**：控制驱动下默认 ~2s 自动答先攻；人工覆盖必须 2s 内，否则自动选先攻。
+- **当前版（19:05:42）**：控制驱动下默认 ~2s 自动答**后攻（`res=2`）**（`YGO_TP_AUTO`/`YGO_TP_AUTO_RES`，`YGO_TP_AUTO_RES=1` 可改先攻）；人工覆盖必须 2s 内。
 - 优先级：**TP > 一切**，收到即答，不要先查别的。
 
 判定：客户端日志 `TP choice res=1 (from control)`，随后 `state.started=true`。
@@ -77,8 +77,8 @@ GET /act_id?id=1     # 后攻（index=2）
 
 **两个特殊响应格式**：
 
-- **`MSG_SORT_CARD`（洗牌/排序）**：响应用**裸位序字节、无长度前缀**——两张卡保持原序 = `hex=0001`。用 `GET /act?seq=..&hex=0001`（或 MCP `control_act({seq, hex:"0001"})`）。**加长度前缀会死循环**（内核反复发同一条 prompt、`retryStreak` 涨）。
-- **多怪兽攻击目标（旧 exe 已知 bug，修复中）**：选攻击目标时旧 exe 被内核拒绝（`curMsg` 15↔10 反复、攻击不结算）。**降级**：直接攻击 / `to_m2` / `end_battle` / `to_ep`，不要连续重试同一目标；poc 修复后改回正常选目标。
+- **`MSG_SORT_CARD`（洗牌/排序）**：响应用**裸位序字节、无长度前缀**——两张卡保持原序 = `hex=0001`。用 `GET /act?seq=..&hex=0001`（或 MCP `control_act({seq, hex:"0001"})`）。**加长度前缀会死循环**（内核反复发同一条 prompt、`retryStreak` 涨）。**19:05:42 版已实现该格式，待 LAN 实机触发验证**。
+- **多怪兽攻击目标——已修复（19:05:42 版）**：旧版本选攻击目标被内核拒绝（`curMsg` 15↔10 反复、攻击不结算）；当前版已修复（LAN 实机 PASS：`send15=2 retry15=0`、`hex=0100`、LP 8000→3900→1850、`loops=0`）。旧 exe 仍降级：直接攻击 / `to_m2` / `end_battle` / `to_ep`。
 
 ## 6. 一局之间：换备牌（Bo3 关键步骤）
 
@@ -138,10 +138,10 @@ GET /act_id?id=0             # = 点真实 btnSideOK / MCP: control_side_done
 | 情况 | 处理 |
 |---|---|
 | 整场结束 `STOC_DUEL_END` | `GET /leave` → 杀客户端 → 重新排队（下一场） |
-| **`tpPending` 出现后突然 `eof`** | **TP 超 13s 未答被踢**：收到即答（新 exe 默认 ~2s 自动先攻）；人工覆盖 <2s |
-| **`/net.state=="confirmed_dead"`（提示管线冻结）** | 旧 exe 默认 10s 静默误判：**启动客户端必须设 `YGO_NET_DEAD_SILENCE_MS=600000`**；新 exe 已改默认+我方回合不判死 |
-| **`sort` 响应死循环（`retryStreak` 涨、`curMsg` 不变）** | 响应用裸位序字节、无长度前缀：两张保持原序 `hex=0001`；带前缀会死循环 |
-| **多怪兽攻击目标选不了（`curMsg` 15↔10 反复）** | 旧 exe 战斗目标 bug（修复中）：降级为直接攻击 / `to_m2` / `end_battle` / `to_ep` |
+| **`tpPending` 出现后突然 `eof`** | **TP 超 13s 未答被踢**：收到即答（当前版默认 ~2s 自动答后攻 `res=2`，`YGO_TP_AUTO_RES` 可配）；人工覆盖 <2s |
+| **`/net.state=="confirmed_dead"`（提示管线冻结）** | 旧 exe 默认 10s 静默误判：旧 exe 必须设 `YGO_NET_DEAD_SILENCE_MS=600000`；当前版默认 60s + 我方回合/倒计时在走不判死 |
+| **`sort` 响应死循环（`retryStreak` 涨、`curMsg` 不变）** | 响应用裸位序字节、无长度前缀：两张保持原序 `hex=0001`；带前缀会死循环；当前版已实现该格式（待实机） |
+| **多怪兽攻击目标选不了（`curMsg` 15↔10 反复）** | 旧 exe 战斗目标 bug（19:05:42 版已修复）：当前版正常选目标；旧 exe 降级为直接攻击 / `to_m2` / `end_battle` / `to_ep` |
 | 对手回合长时间无包（`sinceLastStoc` 持续增长、`timeLeft` 冻结、`awaiting=false`） | 判"对手失联/空等"：静默 2–5 分钟后 `/leave` + 重排（不要一直等） |
 | 空房（进房后 **35 秒**内没有第二个人进来，`/lobby.playerCount<2`） | 立即 `/leave` + 重排；不要傻等（`ranked-loop.ps1 -EmptyRoomSec 35`，默认 35s） |
 | `connection lost` / `/net.state=="disconnected"` | 中止本场、重排（可选：`/join` 同房重连，有 journal 时能回同一局） |

@@ -2,7 +2,7 @@
 
 > **读者**：要真正操作这套桥接去排位/局域网打牌的 LLM agent（以及维护它的工程师）。
 > **目标**：零歧义——每一步"做什么、调什么、返回什么、怎么判定成功/失败、失败怎么修"。
-> **当前客户端构建**：`2026-11-13 14:51:46 / 6,319,104 B`，SHA256 `CDB25977ED3A568D724B90B738595CAB1B7ED8F2C870939E9461944C925DE2FC`（`node doctor.mjs --client <exe> --strict-build` 可校验）。
+> **当前客户端构建**：`2026-11-15 19:05:42 / 6,321,152 B`，SHA256 `82B961D13A011BC4413E7824C4CDC3C6239582ABCF5B094DB9669F29E684F664`（`node doctor.mjs --client <exe> --strict-build` 可校验）。
 > **权威性**：本文是操作流程的权威；字段级契约见 [`MCP-INTERFACE.md`](MCP-INTERFACE.md)，排位实战记录见 [`RANKED-REPORT.md`](RANKED-REPORT.md)，精简单页见 [`MATCH-PLAYBOOK.md`](MATCH-PLAYBOOK.md)。
 > **本文所有示例字段名都按当前客户端真实输出**（可对照 `ranked/logs/playbook-samples/` 下的真实采样）。
 
@@ -12,10 +12,10 @@
 
 ### 0.1 四条硬规则（违反 = 直接丢房/被踢，LLM 实测踩过）
 
-1. **TP 13 秒铁律**：`STOC_SELECT_TP`（先/后攻）出现后**必须在 13 秒内作答**，否则服务端直接 `eof` 踢人（真实 LLM 连丢两个房就是这个原因）。**新 exe 会默认在 ~2 秒内自动答"先攻"**；如果你要人工/外部覆盖，**必须在 2 秒内**给出选择，否则自动选先攻。优先级：**TP > 一切**。
-2. **启动客户端必须设 `YGO_NET_DEAD_SILENCE_MS=600000`**（旧 exe）：默认 10s 静默判死会把"自己回合思考中"误判成 `confirmed_dead` → 提示管线冻结 → 被服务端踢。新 exe 已改默认值并在我方回合/时间在走时不判死；**两版都建议显式设 600000**（10 分钟）。
-3. **`MSG_SORT_CARD`（洗牌/排序）响应用裸位序字节、没有长度前缀**：两张卡保持原序 = `hex=0001`。**带长度前缀（如 `020001`）会死循环**（内核反复发同一条）。用 `control_act({seq, hex:"0001"})`。
-4. **多怪兽攻击目标（旧 exe 已知 bug，修复中）**：`MSG_SELECT_BATTLECMD`/攻击目标选择时旧 exe 会被内核拒绝（`curMsg` 15↔10 反复、攻击消耗不结算）。遇到时**降级为直接攻击/结束战斗阶段**（选 `to_m2`/`end_battle`/`to_ep`），不要连续重试同一选择。poc 修复后此处改为"已修复（版本 x）"。
+1. **TP 13 秒铁律**：`STOC_SELECT_TP`（先/后攻）出现后**必须在 13 秒内作答**，否则服务端直接 `eof` 踢人（真实 LLM 连丢两个房就是这个原因）。**当前版（19:05:42）默认在 ~2 秒内自动答"后攻"（`res=2`）**（env `YGO_TP_AUTO` / `YGO_TP_AUTO_RES`，实机 `TP auto-answered res=2`；可用 `YGO_TP_AUTO_RES=1` 改为先攻）；人工/外部覆盖**必须在 2 秒内**。优先级：**TP > 一切**。
+2. **判死误杀（当前版已修）**：旧 exe 的 `YGO_NET_DEAD_SILENCE_MS` 默认 10s，会把"自己回合思考中"误判成 `confirmed_dead` → 提示管线冻结 → 被踢；**当前版默认阈值 60s，且我方回合/倒计时在走时不判死**（日志 `NET ALIVE reason=our-turn-idle`；实机 40s 思考无 NET DEAD）。**旧 exe 仍必须显式设 `YGO_NET_DEAD_SILENCE_MS=600000`**。
+3. **`MSG_SORT_CARD`（洗牌/排序）响应用裸位序字节、没有长度前缀**：两张卡保持原序 = `hex=0001`。**带长度前缀（如 `020001`）会死循环**（内核反复发同一条）。用 `control_act({seq, hex:"0001"})`。**当前版（19:05:42）已实现该格式，待 LAN 实机触发验证**（bot-scout `sort-test.ydk`）。
+4. **多怪兽攻击目标（当前版已修复）**：旧版本 `MSG_SELECT_BATTLECMD`/攻击目标选择会被内核拒绝（`curMsg` 15↔10 反复、攻击消耗不结算）。**19:05:42 版已修复**（`selectMin==0→[0]`、select 直连字节、stale seq/snapshot 防护；LAN 实机 PASS：`send15=2 retry15=0`、`hex=0100`、LP 8000→3900→1850、`loops=0`）。旧 exe 遇到时仍**降级为直接攻击/结束战斗阶段**。
 
 ### 0.2 十条铁律
 
@@ -238,7 +238,7 @@ YGOPro 客户端（带控制层的构建，gframe/control*.cpp）
 
 **13 秒铁律**（服务端对 `STOC_SELECT_TP` 有超时，超时直接 `eof`）：
 - 从看到 `tpPending=true` 起，**13 秒内必须提交**；LLM 实测"连丢两个房"就是这个。
-- **新 exe**：控制驱动下默认 **~2 秒内自动答"先攻"**，无需 LLM。要人工/外部覆盖 → **2 秒内**给出选择，否则自动选先攻。
+- **当前版（19:05:42 版）**：控制驱动下默认 **~2 秒内自动答"后攻"（`res=2`）**（env `YGO_TP_AUTO` / `YGO_TP_AUTO_RES`；`YGO_TP_AUTO_RES=1` 可改为先攻；实机日志 `TP auto-answered res=2`），无需 LLM。要人工/外部覆盖 → **2 秒内**给出选择。
 - 旧 exe + 人工驱动：**收到即答**（不要等 LLM 思考）；不确定就选先攻（`id=0`）。
 
 **日志**：客户端 `TP choice res=1 (from control)`；policy 侧 `TP-PICK first (index=1)`。
@@ -298,13 +298,15 @@ control_act({ seq: <当前 seq>, hex: "000201" })
 - **错法**：加长度前缀（如 `020001`、`00020001`）→ 内核认为响应不合法，反复发 `MSG_RETRY`/同一条 prompt → **死循环**（`retryStreak` 涨），严重时被服务端踢。
 - 判定成功：动作后 `seq` 前进、`curMsg` 变化；日志无连续 `MSG_RETRY`。
 - 若客户端策略层已经自动处理 `sort`（出现 `kind:"sort"` 时直接选它），LLM 不需要手写 hex；只有要自定义顺序时才用 `control_act`。
+- **当前状态（2026-11-15 19:05:42 版）**：裸位序无前缀的响应格式**已实现**；LAN 实机触发验证进行中（bot-scout `sort-test.ydk`），通过后此处标注"已实机验证"。
 
-#### 3.7.2 多怪兽攻击目标——旧 exe 已知 bug（修复中，先降级）
+#### 3.7.2 多怪兽攻击目标——**已修复（19:05:42 版）**
 
-- 现象：选攻击目标（`MSG_SELECT_BATTLECMD`→目标选择）时旧 exe 被内核拒绝：`curMsg` 在 **15↔10** 之间反复、攻击不结算、回合推进不了。
-- 判定：`/state.curMsg` 反复跳、`/state.retryCount/retryStreak` 上涨、`/state.pipeline.recentMsgs` 出现 15/10 交替。
-- **降级动作（旧 exe）**：不要重试同一目标；改选 **直接攻击**（若可选）或 **`to_m2`/`end_battle`/`to_ep`** 结束战斗阶段，把对局打下去。
-- **新 exe（poc 修复后）**：正常选目标即可；本文届时改为"已修复（版本 x）"。
+- **旧版本现象**：选攻击目标（`MSG_SELECT_BATTLECMD`→目标选择）被内核拒绝：`curMsg` 在 **15↔10** 之间反复、攻击不结算、回合推进不了。
+- **19:05:42 版修复**：`selectMin==0 → [0]`（空选择直接选第 0 项）、select 走直连字节、stale seq/snapshot 防护。
+- **LAN 实机验收**：`send15=2 retry15=0`、`hex=0100`、LP `8000→3900→1850`、`loops=0` —— PASS。
+- **旧 exe 仍需降级**：不要重试同一目标；改选 **直接攻击**（若可选）或 **`to_m2`/`end_battle`/`to_ep`** 结束战斗阶段。
+- 判定修复后正常：`/state.curMsg` 不再 15↔10 交替、`retryStreak` 不涨、攻击正常结算。
 
 ### 3.8 一局结束
 
@@ -542,11 +544,11 @@ control_act({ seq: <当前 seq>, hex: "000201" })
 
 ### 6.1 动作节奏表
 
-> **启动客户端前的硬性配置**：`YGO_NET_DEAD_SILENCE_MS=600000`（旧 exe 默认 10s 会误判 `confirmed_dead`；新 exe 已改默认并在我方回合/时间在走时不判死，但两版都建议显式设 600000）。
+> **启动客户端前的硬性配置**：`YGO_NET_DEAD_SILENCE_MS=600000`（**仅旧 exe 需要**；旧默认 10s 会误判 `confirmed_dead`。**当前版（19:05:42）默认已改为 60s，且我方回合/倒计时在走时不判死**；显式设 600000 对两版都安全）。
 
 | 动作 | 建议间隔/超时 | 说明 |
 |---|---|---|
-| **`STOC_SELECT_TP`（先/后攻）** | **13s 硬上限**（新 exe 自动 ~2s；人工覆盖 <2s） | 超时服务端直接 `eof`；**最高优先级，收到即答** |
+| **`STOC_SELECT_TP`（先/后攻）** | **13s 硬上限**（当前版自动 ~2s；人工覆盖 <2s） | 超时服务端直接 `eof`；**最高优先级，收到即答** |
 | `control_wait_prompt` | `timeout_ms` 20000–30000 | 长轮询；超时正常，重新调用即可（`since` 传上次 seq） |
 | `control_actions` → `control_act_id` | **立即**（<1s） | 拿到候选就选、提交；不要 sleep 思考太久 |
 | `control_act`（`MSG_SORT_CARD`） | **立即**，hex 裸字节无前缀 | 两张保持原序 = `hex:"0001"`；加前缀会死循环（§3.7.1） |
@@ -564,7 +566,7 @@ control_act({ seq: <当前 seq>, hex: "000201" })
 | 单场预算 | 18 分钟（`-MaxMinutesPerMatch`） | 从 `duel started` 起算（不是排队） |
 | 总预算 | 90 分钟（`-MaxTotalMinutes`） | 包含排队时间 |
 
-**`confirmed_dead` 判死阈值**：`/net.state` 变成 `confirmed_dead` 的触发来自 `YGO_NET_DEAD_SILENCE_MS`（旧默认 10000ms）。我们自己回合思考 >10s 会被误判 → 提示管线冻结 → 被踢；**必须设 600000**。新 exe 额外规则：**我方回合、且 `timeLeft` 在走时不判死**。
+**`confirmed_dead` 判死阈值**：`/net.state` 变成 `confirmed_dead` 的触发来自 `YGO_NET_DEAD_SILENCE_MS`。**旧 exe 默认 10000ms**：自己回合思考 >10s 会被误判 → 提示管线冻结 → 被踢；**旧 exe 必须设 600000**。**当前版（19:05:42）默认 60s，并且我方回合、且 `timeLeft` 在走时不会判死**（日志 `NET ALIVE reason=our-turn-idle`；实测 40s 思考无 `NET DEAD`）。
 
 ### 6.2 串行 vs 并行
 
@@ -684,13 +686,13 @@ YGO_CONTROL_PORT=7789 YGO_TP=2 YGO_SIDE_AUTO=1 .\YGOPro.exe -h 127.0.0.1 -p 7911
 | `control_wait_prompt` 一直超时 | 还没开局/对手回合 | `/state.turn`,`/state.awaiting`,`/lobby.bothReady` | 等到 `awaiting=true`；别硬发动作 |
 | `wait_prompt` 立即返回、`seq` 不变 | 唤醒条件含 `!awaiting` | `/state.pipeline.awaiting` | 过滤 `awaiting && seq>lastSeq` |
 | 动作后无进展、`retryStreak` 涨 | 非法/重复响应 | `/state.retryCount`,`retryStreak`,`curMsg` | 停手 → 重新 `/actions`，只按真实 kind 选 |
-| 整场 `winPlayer` 仍是上局结果 | 旧客户端未重置 | `/state.match.game` 是否递增；日志 `DUEL_START reset` | 升级客户端（14:51:46+）；policy 用 `isWin` |
+| 整场 `winPlayer` 仍是上局结果 | 旧客户端未重置 | `/state.match.game` 是否递增；日志 `DUEL_START reset` | 升级客户端（19:05:42+）；policy 用 `isWin` |
 | ready 发了但 `lobby.ready` 不变 | 卡组未加载/界面未到 | `/state.deckMain`,`/lobby`,日志 `ready: clicking HP_READY` | 先 `/deck`，再重试 ready |
 | 双方 ready 但 `started=false` | start latch / 没发 HS_START | `/state.started`,`/lobby.launchSeat`；日志 `STOC_DUEL_START` | 反复 `/start`（≤20 次，2–3s） |
-| **开局 `tpPending` 出现后突然 `eof`** | **TP 超过 13s 未答**（服务端踢） | 日志 `PROMPT publish seq=.. msg=TP` 后无 `TP choice`；`/net.closeReason=eof` | **TP 收到即答**（新 exe 会自动 2s 内答先攻）；人工覆盖 <2s |
-| **`/net.state=="confirmed_dead"`、提示管线冻结** | `YGO_NET_DEAD_SILENCE_MS` 默认 10s，自己回合思考被误判 | `/net.state`,`/net.probe`,`/state.pipeline` | **启动时设 `YGO_NET_DEAD_SILENCE_MS=600000`**；新 exe 也已改默认+我方回合不判死 |
-| **`sort`/排序反复同一条 prompt、`retryStreak` 涨** | 响应带了长度前缀（非裸字节） | `/state.curMsg` 不变、`MSG_RETRY`；`/state.pipeline.recentMsgs` | 改用 `control_act({seq, hex:"0001"})`（裸位序、无前缀），见 §3.7.1 |
-| **多怪兽攻击目标选不了、`curMsg` 15↔10 反复** | 旧 exe 战斗目标 bug（修复中） | `/state.curMsg` 交替、攻击不结算 | 降级：直接攻击 / `to_m2` / `end_battle` / `to_ep`；不要重试同一目标 |
+| **开局 `tpPending` 出现后突然 `eof`** | **TP 超过 13s 未答**（服务端踢） | 日志 `PROMPT publish seq=.. msg=TP` 后无 `TP choice`；`/net.closeReason=eof` | **TP 收到即答**（当前版自动 2s 内答先攻；人工覆盖 <2s） |
+| **`/net.state=="confirmed_dead"`、提示管线冻结** | 旧 exe 默认 10s 静默误判；当前版默认 60s 且我方回合不判死 | `/net.state`,`/net.probe`,`/state.pipeline`；日志 `NET ALIVE reason=our-turn-idle` | 旧 exe 启动时设 `YGO_NET_DEAD_SILENCE_MS=600000`；当前版无需额外设置 |
+| **`sort`/排序反复同一条 prompt、`retryStreak` 涨** | 响应带了长度前缀（非裸字节） | `/state.curMsg` 不变、`MSG_RETRY`；`/state.pipeline.recentMsgs` | 改用 `control_act({seq, hex:"0001"})`（裸位序、无前缀），见 §3.7.1；当前版已实现该格式 |
+| **多怪兽攻击目标选不了、`curMsg` 15↔10 反复** | **旧 exe** 战斗目标 bug（19:05:42 版已修复） | `/state.curMsg` 交替、攻击不结算 | 当前版正常选目标；旧 exe 降级：直接攻击 / `to_m2` / `end_battle` / `to_ep` |
 | 进房后立刻被踢 | 密码错/房已关/被顶号 | `/net.closeReason`,`/chat`,`/state.errorMsg` | 重新排队；不要重复 join 同一房 |
 | 进房后 lobby 只有 `{pos:1,ready:true}` | ghost room（旧连接残留） | `/lobby.players`、`/net.uptimeMs` | `/leave` 重排；不要直连 arena 服“清理” |
 | 结算后卡住不动 | replay 保存对话框 | 日志 `STOC_REPLAY`；`/ui.popups` | 新客户端自动跳过（`replay: dialog skipped`）；旧客户端加 `YGO_SUPPRESS_MODALS` |
@@ -720,9 +722,11 @@ YGO_CONTROL_PORT=7789 YGO_TP=2 YGO_SIDE_AUTO=1 .\YGOPro.exe -h 127.0.0.1 -p 7911
 7. **UI 注入非 100%**：`place`/`attack` 偶发点击失效会直连回退（`UI fallback`，残余 5%~11%）。
 8. **策略与 LLM 不可同时跑**：会互相抢动作；二选一。
 9. **`/leave` 是 HTTP 端点**（MCP 无对应工具）：`POST http://127.0.0.1:7788/leave`。
-10. **指纹/构建**：本文档对应 `2026-11-13 14:51:46 / 6,319,104 B`；旧 exe 缺 `/state.match`/side 等字段，`control_match` 会降级（`fallback:true`）。
-11. **多怪兽攻击目标（旧 exe）——修复中**：旧 exe 在 `MSG_SELECT_BATTLECMD` 的攻击目标选择会被内核拒绝（`curMsg` 15↔10 反复、攻击消耗不结算）。**降级**：直接攻击/`to_m2`/`end_battle`/`to_ep`（见 §3.7.2）。poc 修复后本文改为"已修复（版本 x）"。
-12. **TP 自动应答（新 exe 起）**：控制驱动下默认 ~2s 自动选先攻；要人工覆盖必须 2s 内，13s 是服务端硬上限（见 §3.6 / §0.1）。
+10. **指纹/构建**：本文档对应 `2026-11-15 19:05:42 / 6,321,152 B`；更旧 exe 缺 `/state.match`/side 等字段，`control_match` 会降级（`fallback:true`）。
+11. **多怪兽攻击目标——已修复（19:05:42 版）**：旧 exe 在 `MSG_SELECT_BATTLECMD` 的攻击目标选择会被内核拒绝（`curMsg` 15↔10 反复、攻击消耗不结算）；当前版已修复（LAN 实机 PASS）。旧 exe 仍降级：直接攻击/`to_m2`/`end_battle`/`to_ep`（见 §3.7.2）。
+12. **TP 自动应答（19:05:42 版起）**：控制驱动下默认 ~2s 自动答**后攻（`res=2`）**（`YGO_TP_AUTO`/`YGO_TP_AUTO_RES`，`YGO_TP_AUTO_RES=1` 可改先攻）；要人工覆盖必须 2s 内，13s 是服务端硬上限（见 §3.6 / §0.1）。
+13. **`MSG_SORT_CARD` 格式已实现，待 LAN 实机触发验证**（bot-scout `sort-test.ydk`）；若实机 fail 会再更新本节。
+14. **判死阈值**：当前版默认 60s + 我方回合/倒计时在走不判死（`NET ALIVE reason=our-turn-idle`）；旧 exe 仍是 10s，必须设 `YGO_NET_DEAD_SILENCE_MS=600000`。
 
 ---
 

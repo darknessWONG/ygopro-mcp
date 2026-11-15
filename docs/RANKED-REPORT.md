@@ -172,3 +172,26 @@
 - **LAN 验收**：`match-state-20261113-145150`——`/state.match` 三阶段 PASS（G1 `games[0]` → G2 两条 `2:0` → `DUEL_END` `over=true`）、`/start` latch PASS、`YGO_TP` PASS、`side_ok` PASS；`VERDICT: over=True won=2 games=2`。
 - **回放跳过（LAN 首次实机）**：双方各 2 次 `replay: dialog skipped (control-driven, no wait)`、`replay-save=0`、`stoc=23 stall=0`。
 - 证据：`ranked/logs/match-state-20261113-145150/`、`ranked/logs/lan-match-state-validation.md`（另见 `MCP-INTERFACE.md` §5.6 / §9 第 10 条）。
+
+---
+
+## 10. 2026-11-15 真实 LLM 使用反馈修复（客户端 `19:05:42 / 6,321,152 B`）
+
+真实 LLM 通过 MCP 打排位时反馈 4 个问题，poc 已修复前三项（第 4 项已实现、待 LAN 实机触发验证）：
+
+1. **战斗选攻击目标（已修复）**
+   - 现象：旧版多怪兽选攻击目标时 `curMsg` 在 **15↔10** 反复、攻击消耗不结算（内核拒绝目标选择）。
+   - 修复：`selectMin==0 → [0]`（空选择直接选第 0 项）、select 走直连字节、stale seq/snapshot 防护。
+   - 验收：LAN 实机 PASS —— `send15=2 retry15=0`、`hex=0100`、LP `8000→3900→1850`、`loops=0`。
+2. **TP 13 秒硬上限（默认自动应答）**
+   - 旧版：`STOC_SELECT_TP` 出现后超 13s 未答 → 服务端直接 `eof` 踢人（LLM 实测连丢两个房）。
+   - 修复：默认 **2s 内自动答"后攻"（`res=2`）**（env `YGO_TP_AUTO` / `YGO_TP_AUTO_RES`，`YGO_TP_AUTO_RES=1` 可改先攻）；人工覆盖必须 2s 内。
+   - 实机日志：`TP auto-answered res=2`。
+3. **判死误杀（已修复）**
+   - 旧版：`YGO_NET_DEAD_SILENCE_MS` 默认 10s，自己回合思考会被误判 `confirmed_dead` → 提示管线冻结 → 被踢。
+   - 修复：默认阈值改为 **60s**，且**我方回合/倒计时在走时不判死**（日志 `NET ALIVE reason=our-turn-idle`）；实机 40s 思考无 `NET DEAD`。旧 exe 仍建议显式设 `YGO_NET_DEAD_SILENCE_MS=600000`。
+4. **`MSG_SORT_CARD` 响应格式（已实现、待实机验证）**
+   - 响应是**裸位序字节、无长度前缀**：两张卡保持原序 = `hex=0001`；带前缀会死循环。
+   - 已在 19:05:42 版实现；LAN 实机触发验证进行中（bot-scout 用 `sort-test.ydk`），通过后本节改为"已实机验证"。
+
+> 文档联动：`PLAYBOOK-FULL.md` §3.7.2（攻击目标改为"已修复（19:05:42 版）"）、§3.7.1（sort 已实现，待实机）、§0.1/§6.1（TP 自动/判死默认 60s）。

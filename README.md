@@ -27,7 +27,7 @@
 
 | 需要 | 说明 |
 |---|---|
-| **带控制层的 YGOPro 客户端** | 本仓库**不包含**客户端二进制。控制层是客户端源码里的扩展（`gframe/control*.cpp`，HTTP 端点 `/state` `/prompt` `/wait_prompt` `/actions` `/act_id` `/net` `/ui` 等）。<br>**已测试构建**：`YGOPro.exe` **`2026-11-13 14:51:46` / `6,319,104 B`**<br>SHA256：`CDB25977ED3A568D724B90B738595CAB1B7ED8F2C870939E9461944C925DE2FC`<br>核对：`node doctor.mjs --client <exe>`（默认比 size；加 `--strict-build` 同时比 sha256 —— 用于区分"同 size 不同 build"）。<br>构建：用带控制层补丁的 YGOPro 源码（MyCard 客户端 fork）自行编译，产物放到例如 `mycard-client/bin/release/x64/YGOPro.exe`。 |
+| **带控制层的 YGOPro 客户端** | 本仓库**不包含**客户端二进制。控制层是客户端源码里的扩展（`gframe/control*.cpp`，HTTP 端点 `/state` `/prompt` `/wait_prompt` `/actions` `/act_id` `/net` `/ui` 等）。<br>**已测试构建**：`YGOPro.exe` **`2026-11-15 19:05:42` / `6,321,152 B`**<br>SHA256：`82B961D13A011BC4413E7824C4CDC3C6239582ABCF5B094DB9669F29E684F664`<br>核对：`node doctor.mjs --client <exe>`（默认比 size；加 `--strict-build` 同时比 sha256 —— 用于区分"同 size 不同 build"）。<br>构建：用带控制层补丁的 YGOPro 源码（MyCard 客户端 fork）自行编译，产物放到例如 `mycard-client/bin/release/x64/YGOPro.exe`。 |
 | **Node.js ≥ 18** | 只用内置模块（`fetch`/`http`/`child_process`），**零 npm 依赖**。 |
 | （可选）卡组 `.ydk` | 客户端自己的 `deck/` 目录；控制层用 `POST /deck?name=Blackwing` 预载。本仓库不含卡图/卡表。 |
 
@@ -129,7 +129,8 @@ node doctor.mjs --client "C:\path\to\YGOPro.exe" --strict-build   # 发布自检
 
 ### 更新记录（近期）
 
-- **2026-11-13** 客户端 `14:51:46 / 6,319,104 B`：LAN 全流程验收（`VERDICT: over=True won=2 games=2`）——`/state.match` 整场结果（`game/over/games[]/gamesWonLocal/gamesWonOpp/lastWinnerLocal/lastReasonName`）、`/start` latch 修复、`YGO_TP`/`YGO_SIDE_AUTO`、控制驱动 `STOC_REPLAY` 直接跳过（`replay: dialog skipped`，**LAN 实测** 双方各 2 次、`replay-save=0`、`stoc=23 stall=0`）；MCP 侧新增 `control_match` 一句话报结果。
+- **2026-11-15** 客户端 `19:05:42 / 6,321,152 B`：真实 LLM 使用反馈修复版——① 战斗攻击目标（`curMsg 15↔10` 循环、攻击不结算）修复（`selectMin==0→[0]`、select 直连字节、stale seq/snapshot 防护），LAN 实机 PASS（`send15=2 retry15=0`、`hex=0100`、LP 8000→3900→1850、`loops=0`）；② TP 默认 2s 自动答（`YGO_TP_AUTO`/`YGO_TP_AUTO_RES`，**默认 `res=2`=后攻**，可配 `YGO_TP_AUTO_RES=1` 先攻；实测 `TP auto-answered res=2`）；③ 判死误杀修复（默认阈值 **60s** + 我方回合/倒计时在走不判死，`NET ALIVE reason=our-turn-idle`；实测 40s 思考无 NET DEAD；旧 exe 仍需 `YGO_NET_DEAD_SILENCE_MS=600000`）；④ `MSG_SORT_CARD` 裸位序字节无前缀（`hex=0001`）已实现，待 LAN 实机触发验证（bot-scout `sort-test.ydk`）。
+- **2026-11-13** 客户端 `14:51:46 / 6,319,104 B`（历史）：LAN 全流程验收（`VERDICT: over=True won=2 games=2`）——`/state.match` 整场结果（`game/over/games[]/gamesWonLocal/gamesWonOpp/lastWinnerLocal/lastReasonName`）、`/start` latch 修复、`YGO_TP`/`YGO_SIDE_AUTO`、控制驱动 `STOC_REPLAY` 直接跳过（`replay: dialog skipped`，**LAN 实测** 双方各 2 次、`replay-save=0`、`stoc=23 stall=0`）；MCP 侧新增 `control_match` 一句话报结果；现已被 `19:05:42` 版取代。
 - **2026-11-13** 客户端 `01:11:32 / 6,316,032 B`（历史）：控制驱动下 `STOC_REPLAY` 跳过 + 3/3 Bo3 实机验收；现已被 `14:51:46` 版取代。
 - **2026-11-10** 客户端 `00:07:02 / 6,295,040 B`：Bo3 Game2/3 结果状态重置（`DUEL_START reset result state`）；
   bridge 侧同步 fingerprint + sha256，doctor 新增 `--strict-build`（size+sha256）。
