@@ -560,7 +560,7 @@ control_act({ seq: <当前 seq>, hex: "000201" })
 
 ### 6.1 动作节奏表
 
-> **启动客户端前的硬性配置**：`YGO_NET_DEAD_SILENCE_MS=600000`（**仅旧 exe 需要**；旧默认 10s 会误判 `confirmed_dead`。**当前版（19:05:42）默认已改为 60s，且我方回合/倒计时在走时不判死**；显式设 600000 对两版都安全）。
+> **启动客户端前的硬性配置**：`YGO_NET_DEAD_SILENCE_MS=600000`（**仅旧 exe 需要**；旧默认 10s 会误判 `confirmed_dead`。**当前版（20:11:00）默认已改为 60s，且我方回合/倒计时在走时不判死**；显式设 600000 对两版都安全）。
 
 | 动作 | 建议间隔/超时 | 说明 |
 |---|---|---|
@@ -582,7 +582,7 @@ control_act({ seq: <当前 seq>, hex: "000201" })
 | 单场预算 | 18 分钟（`-MaxMinutesPerMatch`） | 从 `duel started` 起算（不是排队） |
 | 总预算 | 90 分钟（`-MaxTotalMinutes`） | 包含排队时间 |
 
-**`confirmed_dead` 判死阈值**：`/net.state` 变成 `confirmed_dead` 的触发来自 `YGO_NET_DEAD_SILENCE_MS`。**旧 exe 默认 10000ms**：自己回合思考 >10s 会被误判 → 提示管线冻结 → 被踢；**旧 exe 必须设 600000**。**当前版（19:05:42）默认 60s，并且我方回合、且 `timeLeft` 在走时不会判死**（日志 `NET ALIVE reason=our-turn-idle`；实测 40s 思考无 `NET DEAD`）。
+**`confirmed_dead` 判死阈值**：`/net.state` 变成 `confirmed_dead` 的触发来自 `YGO_NET_DEAD_SILENCE_MS`。**旧 exe 默认 10000ms**：自己回合思考 >10s 会被误判 → 提示管线冻结 → 被踢；**旧 exe 必须设 600000**。**当前版（20:11:00）默认 60s，并且我方回合、且 `timeLeft` 在走时不会判死**（日志 `NET ALIVE reason=our-turn-idle`；实测 40s 思考无 `NET DEAD`）。
 
 ### 6.2 串行 vs 并行
 

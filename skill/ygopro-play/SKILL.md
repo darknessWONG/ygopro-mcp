@@ -13,7 +13,7 @@ description: 用 MCP 控制层真实操作 YGOPro 客户端打牌（MC 线上排
 ## 0. 最高优先级硬规则（踩过的坑）
 
 1. **TP（先后攻）13 秒铁律**：`STOC_SELECT_TP` 出现后 **13s 内必须答**，否则服务端直接 `eof` 踢人。新 exe 默认 **2 秒自动答**（先/后攻按 `YGO_TP_AUTO_RES`，默认 2=后手）；外部要覆盖只能在 2 秒内 `/act_id kind=tp`。
-2. **启动必须设** `YGO_NET_DEAD_SILENCE_MS=600000`：否则 10s 静默会把"自己回合思考中"误判 `confirmed_dead` → 提示管线冻结 → 被踢（新 exe 已默认 60s 且我方回合不判死，但仍建议显式设）。
+2. **判死阈值**：旧版（≤2026-11-15 19:05:42）默认 10s，会把"自己回合思考中"误判 `confirmed_dead` → 管线冻结 → 被踢，**旧版启动必须设 `YGO_NET_DEAD_SILENCE_MS=600000`**；当前版（20:11:00）默认 60s 且**我方回合/倒计时在走时永不判死**（`NET ALIVE reason=our-turn-idle`），显式设仍安全但非必需。
 3. **MSG_SORT_CARD（洗牌/排序）响应是裸位序字节、无长度前缀**：两张卡保持原序 = `hex="0001"`；用 `control_act({seq, hex})`，**不要**加计数前缀（会死循环）。
 4. **多怪兽攻击目标**：旧版会核心拒绝（`curMsg` 15↔10 反复、攻击消耗但不结算）；新 exe 已修（见 PLAYBOOK-FULL §3.7.2），若仍遇到就降级：直接攻击 / `to_m2` / `end_battle`。
 5. **announce 140–143**：旧版 `curMsg=143` 前会 `awaiting=false` 卡住；新 exe（20:11:00+）`/actions` 提供 `announce_race/announce_attrib/announce_card/announce_number`，编码 **race/attrib=掩码、card=卡号、number=数值本身**（候选见 `/prompt.announceNumberValues`）。
