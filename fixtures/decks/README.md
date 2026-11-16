@@ -10,6 +10,8 @@ Copies of the decks used by the LAN verification scripts (`verify-battle-target.
 | `sort-test` | swaps three main-deck cards for Card Shuffle (12183332) — note: Card Shuffle does *not* produce MSG_SORT_CARD in this core |
 | `sort2-test` | normal-monster shell used to trigger SORT_CARD from a spell |
 | `sort3-test` | includes Card Advance (52112003), which first asks MSG_ANNOUNCE_NUMBER then MSG_SORT_CARD |
+| `battle-test-low` | low-ATK defenders (1500) so the attacker must pick a target instead of direct-attacking |
 | `sort4-test` | 3x 49998907 ("Research on the Immortal" style trap, Duel.SortDecktop(tp,tp,3)) + 37 vanilla monsters: the reliable MSG_SORT_CARD trigger |
 
 Cards that do **not** produce MSG_SORT_CARD: Card Shuffle (12183332), Pot of Duality (98645731).
+
