@@ -2,7 +2,7 @@
 
 > **读者**：要真正操作这套桥接去排位/局域网打牌的 LLM agent（以及维护它的工程师）。
 > **目标**：零歧义——每一步"做什么、调什么、返回什么、怎么判定成功/失败、失败怎么修"。
-> **当前客户端构建**：`2026-11-16 10:25:14 / 6,327,808 B`，SHA256 `B2421E30A6CBA5B323BF9E8AAD59CEB1C5293FC67BBA0CA4C231EFEAEF46C405`（`node doctor.mjs --client <exe> --strict-build` 可校验）。
+> **当前客户端构建**：`2026-11-16 11:31:00 / 6,328,320 B`，SHA256 `8DBDCDFFC4BD58E40D74DBD5A697A68ECFD916DD9426298696864C0304E8A59F`（`node doctor.mjs --client <exe> --strict-build` 可校验）。
 > **权威性**：本文是操作流程的权威；字段级契约见 [`MCP-INTERFACE.md`](MCP-INTERFACE.md)，排位实战记录见 [`RANKED-REPORT.md`](RANKED-REPORT.md)，精简单页见 [`MATCH-PLAYBOOK.md`](MATCH-PLAYBOOK.md)。
 > **本文所有示例字段名都按当前客户端真实输出**（可对照 `ranked/logs/playbook-samples/` 下的真实采样）。
 
@@ -13,7 +13,7 @@
 ### 0.1 五条硬规则（违反 = 直接丢房/被踢，LLM 实测踩过）
 
 1. **TP 13 秒铁律**：`STOC_SELECT_TP`（先/后攻）出现后**必须在 13 秒内作答**，否则服务端直接 `eof` 踢人（真实 LLM 连丢两个房就是这个原因）。**当前版（19:05:42 起）默认在 ~2 秒内自动答"后攻"（`res=2`）**（env `YGO_TP_AUTO` / `YGO_TP_AUTO_RES`，实机 `TP auto-answered res=2`；可用 `YGO_TP_AUTO_RES=1` 改为先攻）；人工/外部覆盖**必须在 2 秒内**。优先级：**TP > 一切**。
-2. **判死误杀（当前版已修）**：旧 exe 的 `YGO_NET_DEAD_SILENCE_MS` 默认 10s，会把"自己回合思考中"误判成 `confirmed_dead` → 提示管线冻结 → 被踢；**当前版默认阈值 60s，且我方回合/倒计时在走时不判死**（日志 `NET ALIVE reason=our-turn-idle`；实机 40s 思考无 NET DEAD）。**旧 exe 仍必须显式设 `YGO_NET_DEAD_SILENCE_MS=600000`**。
+2. **判死误杀（当前版已修，11:31:00 起 probe 也不再单独判死）**：旧 exe 的 `YGO_NET_DEAD_SILENCE_MS` 默认 10s，会把"自己回合思考中"误判成 `confirmed_dead` → 提示管线冻结 → 被踢；**当前版默认阈值 60s，且我方回合/倒计时/awaiting/busy 时不判死**（`NET ALIVE reason=our-turn-idle`）。**另一旧版 bug：`/tip` 探活连 2 次超时就 `NET DEAD reason=probe-fails` + `disconnected error`**——对手长展开 7.5s 静默会被误踢；`11:31:00` 版起 probe 失败**只置 `probe_failed`**（`NET probe failed ... (defer to passive silence guard)`），判死统一走被动静默；`YGO_NET_PROBE_FAIL_MAX`（默认 5，仅降级/日志）。**旧 exe 仍必须显式设 `YGO_NET_DEAD_SILENCE_MS=600000`（或用 `YGO_NET_PROBE=0` 规避 probe 误判）**。
 3. **`MSG_SORT_CARD`（洗牌/排序）响应用裸位序字节、没有长度前缀**：两张卡保持原序 = `hex=0001`。**带长度前缀（如 `020001`）会死循环**（内核反复发同一条）。用 `control_act({seq, hex:"0001"})`。**20:11:00 版已实机验证**（`realMsg=25 len=3 hex=000102`，改直连字节、`UI skip sort -> direct bytes`）。
 4. **多怪兽攻击目标（当前版已修复）**：旧版本 `MSG_SELECT_BATTLECMD`/攻击目标选择会被内核拒绝（`curMsg` 15↔10 反复、攻击消耗不结算）。**19:05:42 起、20:11:00 最终版含修复**（`selectMin==0→[0]`、select 直连字节、stale seq/snapshot 防护；LAN 实机 PASS：`send15=2 retry15=0`、`hex=0100`、LP 8000→3900→1850、`loops=0`）。旧 exe 遇到时仍**降级为直接攻击/结束战斗阶段**。
 5. **announce 140–143（20:11:00 修复）**：旧版 `curMsg=143` 前会 `awaiting=false` 卡住；当前版 `/actions` 提供 `announce_race/announce_attrib/announce_card/announce_number`，编码 **race/attrib=掩码、card=卡号、number=数值本身**（候选见 `/prompt.announceNumberValues`）。详见 §3.7.3。
@@ -493,12 +493,12 @@ control_act({ seq: <当前 seq>, hex: "000201" })
 | `connected`/`joined` | TCP 已连 / 已进房 |
 | `connectState` | 0=未连，其它=连接阶段 |
 | `closeReason` | **`none`（正常/未断）**、`eof`（对端 FIN，服务器主动关）、`error`（连接错误）、`stop`/`exit`（我们主动停/退）、`unknown` |
-| `alive` | 存活判定（探活/STOC 综合） |
-| `state` | `idle` / `healthy` / `disconnected` / `confirmed_dead` / `disconnected` |
+| `alive` | 存活判定（探活/STOC 综合）；**`probe.fails` 达到 `YGO_NET_PROBE_FAIL_MAX` 也不代表 `alive=false`**——`11:31:00` 版起 probe 失败只置 `probe_failed`，判死看被动静默 |
+| `state` | `idle` / `healthy` / `probe_failed` / `disconnected` / `confirmed_dead` / `unsupported` |
 | `inDuel`/`turn` | 对局中/当前回合 |
 | `lastStocAt`/`lastStocName`/`sinceLastStoc` | 最近 STOC 时间/名字/距今 ms（`-1`=没有） |
 | `uptimeMs` | 连接存活时长 |
-| `probe` | `{enabled,unsupported,lastSentAt,lastReplyAt,rttMs,fails,lastReplyPlayerType,lastReplyText}` |
+| `probe` | `{enabled,unsupported,lastSentAt,lastReplyAt,rttMs,fails,lastReplyPlayerType,lastReplyText}`；`fails` 达 fail-max 仅影响 `state`（`probe_failed`），**不会**单独触发断线 |
 | `lastNetMsg` | `{id,text,ageMs}` 最近一条系统消息（`STOC_CHAT`） |
 
 > 断线排查优先看 `closeReason` + `lastStocName` + `sinceLastStoc`；`eof` 且 `sinceLastStoc` 很大/很小都可能：小=服务器正在推倒计时后关（AFK 踢），大=链路静默后超时（见 `srvpro-disconnect-research.md`）。
@@ -585,7 +585,7 @@ control_act({ seq: <当前 seq>, hex: "000201" })
 | 单场预算 | 18 分钟（`-MaxMinutesPerMatch`） | 从 `duel started` 起算（不是排队） |
 | 总预算 | 90 分钟（`-MaxTotalMinutes`） | 包含排队时间 |
 
-**`confirmed_dead` 判死阈值**：`/net.state` 变成 `confirmed_dead` 的触发来自 `YGO_NET_DEAD_SILENCE_MS`。**旧 exe 默认 10000ms**：自己回合思考 >10s 会被误判 → 提示管线冻结 → 被踢；**旧 exe 必须设 600000**。**当前版（20:11:00）默认 60s，并且我方回合、且 `timeLeft` 在走时不会判死**（日志 `NET ALIVE reason=our-turn-idle`；实测 40s 思考无 `NET DEAD`）。
+**`confirmed_dead` 判死阈值**：`/net.state` 变成 `confirmed_dead` 的触发来自 `YGO_NET_DEAD_SILENCE_MS`。**旧 exe 默认 10000ms**：自己回合思考 >10s 会被误判 → 提示管线冻结 → 被踢；**旧 exe 必须设 600000**。**当前版默认 60s，并且我方回合、且 `timeLeft` 在走时不会判死**（日志 `NET ALIVE reason=our-turn-idle`）。**`11:31:00` 版起 `/tip` probe 失败不再单独判死**（旧版 `NET DEAD reason=probe-fails` 是 bug）：失败只 `probe_failed`，日志 `NET probe failed fails=.. (defer to passive silence guard)`，`YGO_NET_PROBE_FAIL_MAX`（默认 5）仅降级/日志；**对手长展开 7–8s 静默不应判死**。
 
 ### 6.2 串行 vs 并行
 
@@ -717,6 +717,8 @@ YGO_CONTROL_PORT=7789 YGO_TP=2 YGO_SIDE_AUTO=1 .\YGOPro.exe -h 127.0.0.1 -p 7911
 | 进房后立刻被踢 | 密码错/房已关/被顶号 | `/net.closeReason`,`/chat`,`/state.errorMsg` | 重新排队；不要重复 join 同一房 |
 | 进房后 lobby 只有 `{pos:1,ready:true}` | ghost room（旧连接残留） | `/lobby.players`、`/net.uptimeMs` | `/leave` 重排；不要直连 arena 服“清理” |
 | 结算后卡住不动 | replay 保存对话框 | 日志 `STOC_REPLAY`；`/ui.popups` | 新客户端自动跳过（`replay: dialog skipped`）；旧客户端加 `YGO_SUPPRESS_MODALS` |
+| **`NET probe timeout fails=1/2` → `NET DEAD reason=probe-fails` → `disconnected error`** | **旧版 bug**：probe 独立 2 次阈值，对手长展开 ~7.5s 静默被误踢（`11:31:00` 起已修） | 日志 `NET probe timeout fails=.. sinceStoc=.. ourTurn=.. awaiting=..`；`/net.state=probe_failed` | 升级 `11:31:00+`；旧版临时 `YGO_NET_PROBE=0` 规避；新版失败只降级、等被动静默 |
+| **`NET probe deferred (reason=our-turn/awaiting/busy/silence ...)`** | 新版正常行为（probe 让位于守卫，不判死） | `/net.probe.fails`、`/net.alive`（仍 true） | 不用处理，继续对局 |
 | 中途 `eof`、`sinceLastStoc` 很小 | 服务端 AFK 踢（~90s） | `/chat` 是否有 afk/倒计时警告；决策耗时 | 决策压到 <60s；无解则 surrender 干净结束 |
 | 中途 `eof`、`sinceLastStoc` 很大 | 链路静默/掉线 | `/net.probe.fails`,`/chat` | 判失联，重排/重连 |
 | 排队永远拿不到房 | athletic 无人（深夜）/API 故障 | `authUser` 200、`/ygopro/match/stats/athletic` | 等到白天/换 arena 验证；见 `match-queue-research.md` |
@@ -743,13 +745,14 @@ YGO_CONTROL_PORT=7789 YGO_TP=2 YGO_SIDE_AUTO=1 .\YGOPro.exe -h 127.0.0.1 -p 7911
 7. **UI 注入非 100%**：`place`/`attack` 偶发点击失效会直连回退（`UI fallback`，残余 5%~11%）。
 8. **策略与 LLM 不可同时跑**：会互相抢动作；二选一。
 9. **`/leave` 是 HTTP 端点**（MCP 无对应工具）：`POST http://127.0.0.1:7788/leave`。
-10. **指纹/构建**：本文档对应 `2026-11-16 10:25:14 / 6,327,808 B`；更旧 exe 缺 `/state.match`/side/announce/`awaitingSinceMs` 等字段，`control_match` 会降级（`fallback:true`）。
+10. **指纹/构建**：本文档对应 `2026-11-16 11:31:00 / 6,328,320 B`；更旧 exe 缺 `/state.match`/side/announce/`awaitingSinceMs` 等字段，`control_match` 会降级（`fallback:true`）。
 11. **多怪兽攻击目标——已修复（19:05:42 起，20:11:00 含）**：旧 exe 在 `MSG_SELECT_BATTLECMD` 的攻击目标选择会被内核拒绝（`curMsg` 15↔10 反复、攻击消耗不结算）；当前版已修复（LAN 实机 PASS）。旧 exe 仍降级：直接攻击/`to_m2`/`end_battle`/`to_ep`（见 §3.7.2）。
 12. **TP 自动应答（19:05:42 版起）**：控制驱动下默认 ~2s 自动答**后攻（`res=2`）**（`YGO_TP_AUTO`/`YGO_TP_AUTO_RES`，`YGO_TP_AUTO_RES=1` 可改先攻）；要人工覆盖必须 2s 内，13s 是服务端硬上限（见 §3.6 / §0.1）。
 13. **`MSG_SORT_CARD`——已实机验证（20:11:00 版）**：裸位序字节无前缀（`realMsg=25 len=3 hex=000102`），改直连字节、不再 UI fallback（`UI skip sort -> direct bytes`）。
 14. **announce 140–143——已修复（20:11:00 版），已实机验证**：见 §3.7.3。
-15. **判死阈值**：当前版默认 60s + 我方回合/倒计时在走不判死（`NET ALIVE reason=our-turn-idle`）；旧 exe 仍是 10s，必须设 `YGO_NET_DEAD_SILENCE_MS=600000`。
+15. **判死阈值**：当前版默认 60s + 我方回合/倒计时/awaiting/busy 不判死（`NET ALIVE reason=our-turn-idle`）；旧 exe 仍是 10s，必须设 `YGO_NET_DEAD_SILENCE_MS=600000`。
 16. **prompt 空等 ~90s 会被 MC 排位按 AFK `eof` 踢；LAN srvpro 不踢 eof，而是 180s `TIMEOUT` 判负**（证据 `ranked/logs/eof-guard-validation.md`、`control-23776.log`）。`10:25:14` 版 guard 默认 60s 兜底（`YGO_PROMPT_AUTO_DEFAULT_MS`），`/prompt.awaitingSinceMs` 可看等待时长；别依赖兜底。
+17. **probe（`/tip`）误判——已修复（11:31:00 版）**：旧版 probe 2 次超时即 `NET DEAD reason=probe-fails` + 断线（对手长展开 7.5s 静默被误踢）；新版只降级 `probe_failed`（`YGO_NET_PROBE_FAIL_MAX=5` 仅日志/降级），判死走被动静默。**服务端自身断线无法预防**（该限制保留）。
 
 ---
 

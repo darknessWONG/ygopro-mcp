@@ -216,3 +216,18 @@
   - **fast PASS**：正常快速作答，auto-default 不触发；
   - **negative PASS\***：`YGO_PROMPT_AUTO_DEFAULT_MS=0` → 无 auto-default；**LAN srvpro 不踢 eof，而是 180s `TIMEOUT` 判负**（与 MC 排位 ~90s eof 不同，`control-23776.log` 以 MC 为准）。
 - **对 LLM 的要求**：不要依赖 guard；正常 60s 内必须答（`/prompt.awaitingSinceMs` 可看等待时长）。guard 只是保命兜底。
+
+---
+
+## 12. 2026-11-16 probe-fails 误判修复（`11:31:00 / 6,328,320 / 8DBDCDFF…`）
+
+- **现象**：对手（Snake-Eye）长展开期间，客户端与对手均非我方回合（`awaiting=0`）：
+  - `NET probe timeout fails=1 sinceStoc=4485ms` → `fails=2 sinceStoc=7469ms` → `NET DEAD reason=probe-fails` → `NET disconnected reason=error`；
+  - 总静默仅 **~7.5s** 就被判死断线（旧 exe）；这段静默里其实对手正常在打。
+- **根因**：`/tip` 探活有独立的 **2 次失败**阈值，且不受 `YGO_NET_DEAD_SILENCE_MS` 控制 → 与被动静默判死是两套逻辑，probe 路径会抢先误杀。
+- **修复（`11:31:00` 版）**：
+  - `/tip` 超时**不再单独判死**：只置 `probe_failed` 并打 `NET probe failed fails=.. (defer to passive silence guard)`；
+  - 判死统一由被动静默阈值 `YGO_NET_DEAD_SILENCE_MS`（默认 60000）+ **我方回合/倒计时/`awaiting`/busy 守卫**决定（日志 `NET probe deferred (reason=our-turn/awaiting/busy/silence sinceStoc=..)`）；
+  - 新增 `YGO_NET_PROBE_FAIL_MAX`（默认 **5**，仅控制降级/日志）。
+- **验证**：待 bot-scout 结果后补（positive/negative 用例与 `ranked/logs/` 证据）；当前结论以客户端源码/日志语义为准。
+- **对 LLM 的要求**：`/net.state == "probe_failed"` 或 `fails` 增长**不等于断线**（`alive` 仍 true）；对手长展开 7–8s 静默属正常，不要因为 `probe.fails` 提前 `/leave`。

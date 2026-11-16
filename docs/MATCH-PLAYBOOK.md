@@ -143,7 +143,8 @@ GET /act_id?id=0             # = 点真实 btnSideOK / MCP: control_side_done
 | 整场结束 `STOC_DUEL_END` | `GET /leave` → 杀客户端 → 重新排队（下一场） |
 | **`tpPending` 出现后突然 `eof`** | **TP 超 13s 未答被踢**：收到即答（当前版默认 ~2s 自动答后攻 `res=2`，`YGO_TP_AUTO_RES` 可配）；人工覆盖 <2s |
 | **`eof` 前有 `PROMPT publish`、~88s 无 `SEND RESPONSE`** | **未答 AFK**（MC 排位 ~90s eof；LAN srvpro 是 180s `TIMEOUT`）：`10:25:14` 版 guard 默认 60s 自动兜底；`/prompt.awaitingSinceMs` 看等待时长；LLM 60s 内必答 |
-| **`/net.state=="confirmed_dead"`（提示管线冻结）** | 旧 exe 默认 10s 静默误判：旧 exe 必须设 `YGO_NET_DEAD_SILENCE_MS=600000`；当前版默认 60s + 我方回合/倒计时在走不判死 |
+| **`/net.state=="confirmed_dead"`（提示管线冻结）** | 旧 exe 默认 10s 静默误判：旧 exe 必须设 `YGO_NET_DEAD_SILENCE_MS=600000`；当前版默认 60s + 我方回合/倒计时/awaiting 不判死 |
+| **`NET probe timeout fails=1/2` → `NET DEAD reason=probe-fails` → `disconnected error`** | **旧版 bug**（对手长展开 ~7.5s 静默被误踢；`11:31:00` 起已修：probe 失败只降级 `probe_failed`，`YGO_NET_PROBE_FAIL_MAX=5` 仅日志）；旧版可 `YGO_NET_PROBE=0` 规避 |
 | **`sort` 响应死循环（`retryStreak` 涨、`curMsg` 不变）** | 响应用裸位序字节、无长度前缀：两张保持原序 `hex=0001`；带前缀会死循环；20:11:00 版已实机验证（`hex=000102`） |
 | **`curMsg=143` 卡住、`awaiting=false`** | 旧版 announce prompt 未发布 → 升级到 20:11:00+；用 `/actions` 的 `announce_number`（数值本身）/`announce_race/attrib/card` |
 | **多怪兽攻击目标选不了（`curMsg` 15↔10 反复）** | 旧 exe 战斗目标 bug（19:05:42 起已修复）：当前版正常选目标；旧 exe 降级为直接攻击 / `to_m2` / `end_battle` / `to_ep` |
