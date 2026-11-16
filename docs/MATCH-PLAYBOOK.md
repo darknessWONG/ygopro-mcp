@@ -57,6 +57,7 @@ GET /act_id?id=1     # 后攻（index=2）
 - **13 秒铁律**：`STOC_SELECT_TP` 出现后 13s 内必须答，否则服务端直接 `eof` 踢人（LLM 实测连丢两个房）。
 - **当前版（20:11:00；该行为自 19:05:42 起）**：控制驱动下默认 ~2s 自动答**后攻（`res=2`）**（`YGO_TP_AUTO`/`YGO_TP_AUTO_RES`，`YGO_TP_AUTO_RES=1` 可改先攻）；人工覆盖必须 2s 内。
 - 优先级：**TP > 一切**，收到即答，不要先查别的。
+- **60s 答不了别硬等**：`10:25:14` 版起 prompt 空等 60s 会自动发保守默认（`YGO_PROMPT_AUTO_DEFAULT_MS`，45s 先 `PROMPT idle warning`），90s 服务端 AFK `eof`；`/prompt.awaitingSinceMs` 可看等待时长。
 
 判定：客户端日志 `TP choice res=1 (from control)`，随后 `state.started=true`。
 
@@ -116,6 +117,7 @@ GET /act_id?id=0             # = 点真实 btnSideOK / MCP: control_side_done
 - `waiting` 是瞬时值，LAN 实测常 0–16ms；要判断是否等过对手用 sticky 字段 `waitingSeen` / `lastWaitMs` / `elapsedMs`。
 - 等待期间用 `/net`（`alive` / `sinceLastStoc` / `closeReason`）判断掉线；**不要**因为 waiting 就重复发 `side_ok`（会重复点按钮）。
 - 对手长时间不确认（>数分钟）且 `/net` 判定失联 → 离开房间重排队（见第 8 节）。
+- **换备阶段同样受 EOF guard 保护**：`10:25:14` 版起 side prompt 空等 60s 会被自动兜底（不会让你静默到 90s eof），但兜底不等于帮你换牌——自己的 `side_ok` 要在 60s 内完成。
 
 ## 7. 下一局开始 & 整场结束
 
@@ -140,6 +142,7 @@ GET /act_id?id=0             # = 点真实 btnSideOK / MCP: control_side_done
 |---|---|
 | 整场结束 `STOC_DUEL_END` | `GET /leave` → 杀客户端 → 重新排队（下一场） |
 | **`tpPending` 出现后突然 `eof`** | **TP 超 13s 未答被踢**：收到即答（当前版默认 ~2s 自动答后攻 `res=2`，`YGO_TP_AUTO_RES` 可配）；人工覆盖 <2s |
+| **`eof` 前有 `PROMPT publish`、~88s 无 `SEND RESPONSE`** | **未答 AFK**（MC 排位 ~90s eof；LAN srvpro 是 180s `TIMEOUT`）：`10:25:14` 版 guard 默认 60s 自动兜底；`/prompt.awaitingSinceMs` 看等待时长；LLM 60s 内必答 |
 | **`/net.state=="confirmed_dead"`（提示管线冻结）** | 旧 exe 默认 10s 静默误判：旧 exe 必须设 `YGO_NET_DEAD_SILENCE_MS=600000`；当前版默认 60s + 我方回合/倒计时在走不判死 |
 | **`sort` 响应死循环（`retryStreak` 涨、`curMsg` 不变）** | 响应用裸位序字节、无长度前缀：两张保持原序 `hex=0001`；带前缀会死循环；20:11:00 版已实机验证（`hex=000102`） |
 | **`curMsg=143` 卡住、`awaiting=false`** | 旧版 announce prompt 未发布 → 升级到 20:11:00+；用 `/actions` 的 `announce_number`（数值本身）/`announce_race/attrib/card` |

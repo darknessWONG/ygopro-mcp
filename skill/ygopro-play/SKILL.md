@@ -19,6 +19,7 @@ description: 用 MCP 控制层真实操作 YGOPro 客户端打牌（MC 线上排
 5. **announce 140–143**：旧版 `curMsg=143` 前会 `awaiting=false` 卡住；新 exe（20:11:00+）`/actions` 提供 `announce_race/announce_attrib/announce_card/announce_number`，编码 **race/attrib=掩码、card=卡号、number=数值本身**（候选见 `/prompt.announceNumberValues`）。
 6. **`awaiting=false` 不发动作**；同一条 prompt 只回一次（`seq` 去重）；`/act_id` 带 `seq=` 防过期。
 7. **整场胜负只信 `control_match`**，不要用 `winPlayer` 推。
+8. **EOF guard（10:25:14 版起）**：prompt 空等 ~90s 会被 MC 排位按 AFK `eof` 踢；`YGO_PROMPT_AUTO_DEFAULT_MS`（默认 60000，0=关）45s 打 `PROMPT idle warning`、60s 自动发保守默认（`PROMPT auto-default ... (idle guard, LLM silent)`）。**超 60s 没答会被 guard 顶掉（保守动作），但别依赖它——正常要快**；`/prompt.awaitingSinceMs` 可看等待时长。
 
 ## 1. 先确认可用（30 秒）
 
@@ -81,6 +82,7 @@ while not state.match.over:
 | 进房 35s 没人来 | `control_lobby.playerCount<2` | 离开重排 |
 | 对手回合长时间无包 | `turnPlayerLocal!=0` 且 `net.sinceLastStoc` 增长、`timeLeft` 冻结 | 180s 后离开重排 |
 | `net.closeReason=="eof"` | 服务端主动断 | 本场作废重排；若刚 `tpPending` 过 → 就是 TP 超时 |
+| `eof` 前有 `PROMPT publish`、~88s 无 `SEND RESPONSE` | 未答 AFK（MC 排位 ~90s；LAN srvpro 是 180s TIMEOUT） | `10:25:14` 版 guard 60s 自动兜底；`/prompt.awaitingSinceMs` 看等待长度；LLM 60s 内必答 |
 | 卡 `STOC_SELECT_TP` | `prompt.tpPending` | 立刻 `control_act_id`（13s 内） |
 | 卡 `STOC_CHANGE_SIDE` | `state.side.pending` | 两侧 `control_side_done` |
 | `side_ok` 报 `counts must match` | 换备不守恒 | 换回等量再 done |
@@ -97,6 +99,8 @@ while not state.match.over:
 ```powershell
 cd $ROOT
 $env:YGO_NET_DEAD_SILENCE_MS = '600000'
+$env:YGO_PROMPT_AUTO_DEFAULT_MS = '60000'   # EOF guard（10:25:14 版默认即 60000；0=关，不建议）
+$env:YGO_PROMPT_IDLE_WARN_MS = '45000'      # 空闲告警（默认 45000）
 powershell -NoProfile -ExecutionPolicy Bypass -File bridge\ranked-loop.ps1 `
   -Runs 3 -MaxMinutesPerMatch 25 -MaxTotalMinutes 240 -Deck <卡组> `
   -ShotEverySec 10 -StallSec 120 -SilentAbortSec 180 -EmptyRoomSec 35

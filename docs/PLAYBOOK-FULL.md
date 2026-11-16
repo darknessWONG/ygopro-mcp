@@ -2,7 +2,7 @@
 
 > **读者**：要真正操作这套桥接去排位/局域网打牌的 LLM agent（以及维护它的工程师）。
 > **目标**：零歧义——每一步"做什么、调什么、返回什么、怎么判定成功/失败、失败怎么修"。
-> **当前客户端构建**：`2026-11-15 20:11:00 / 6,323,712 B`，SHA256 `32AF716D5A013B40C4337DE3CA873C78F00A693065D7D01A6CF8FBC2089E9520`（`node doctor.mjs --client <exe> --strict-build` 可校验）。
+> **当前客户端构建**：`2026-11-16 10:25:14 / 6,327,808 B`，SHA256 `B2421E30A6CBA5B323BF9E8AAD59CEB1C5293FC67BBA0CA4C231EFEAEF46C405`（`node doctor.mjs --client <exe> --strict-build` 可校验）。
 > **权威性**：本文是操作流程的权威；字段级契约见 [`MCP-INTERFACE.md`](MCP-INTERFACE.md)，排位实战记录见 [`RANKED-REPORT.md`](RANKED-REPORT.md)，精简单页见 [`MATCH-PLAYBOOK.md`](MATCH-PLAYBOOK.md)。
 > **本文所有示例字段名都按当前客户端真实输出**（可对照 `ranked/logs/playbook-samples/` 下的真实采样）。
 
@@ -10,13 +10,14 @@
 
 ## 0. 先读这一段（TL;DR）
 
-### 0.1 四条硬规则（违反 = 直接丢房/被踢，LLM 实测踩过）
+### 0.1 五条硬规则（违反 = 直接丢房/被踢，LLM 实测踩过）
 
-1. **TP 13 秒铁律**：`STOC_SELECT_TP`（先/后攻）出现后**必须在 13 秒内作答**，否则服务端直接 `eof` 踢人（真实 LLM 连丢两个房就是这个原因）。**当前版（19:05:42）默认在 ~2 秒内自动答"后攻"（`res=2`）**（env `YGO_TP_AUTO` / `YGO_TP_AUTO_RES`，实机 `TP auto-answered res=2`；可用 `YGO_TP_AUTO_RES=1` 改为先攻）；人工/外部覆盖**必须在 2 秒内**。优先级：**TP > 一切**。
+1. **TP 13 秒铁律**：`STOC_SELECT_TP`（先/后攻）出现后**必须在 13 秒内作答**，否则服务端直接 `eof` 踢人（真实 LLM 连丢两个房就是这个原因）。**当前版（19:05:42 起）默认在 ~2 秒内自动答"后攻"（`res=2`）**（env `YGO_TP_AUTO` / `YGO_TP_AUTO_RES`，实机 `TP auto-answered res=2`；可用 `YGO_TP_AUTO_RES=1` 改为先攻）；人工/外部覆盖**必须在 2 秒内**。优先级：**TP > 一切**。
 2. **判死误杀（当前版已修）**：旧 exe 的 `YGO_NET_DEAD_SILENCE_MS` 默认 10s，会把"自己回合思考中"误判成 `confirmed_dead` → 提示管线冻结 → 被踢；**当前版默认阈值 60s，且我方回合/倒计时在走时不判死**（日志 `NET ALIVE reason=our-turn-idle`；实机 40s 思考无 NET DEAD）。**旧 exe 仍必须显式设 `YGO_NET_DEAD_SILENCE_MS=600000`**。
 3. **`MSG_SORT_CARD`（洗牌/排序）响应用裸位序字节、没有长度前缀**：两张卡保持原序 = `hex=0001`。**带长度前缀（如 `020001`）会死循环**（内核反复发同一条）。用 `control_act({seq, hex:"0001"})`。**20:11:00 版已实机验证**（`realMsg=25 len=3 hex=000102`，改直连字节、`UI skip sort -> direct bytes`）。
 4. **多怪兽攻击目标（当前版已修复）**：旧版本 `MSG_SELECT_BATTLECMD`/攻击目标选择会被内核拒绝（`curMsg` 15↔10 反复、攻击消耗不结算）。**19:05:42 起、20:11:00 最终版含修复**（`selectMin==0→[0]`、select 直连字节、stale seq/snapshot 防护；LAN 实机 PASS：`send15=2 retry15=0`、`hex=0100`、LP 8000→3900→1850、`loops=0`）。旧 exe 遇到时仍**降级为直接攻击/结束战斗阶段**。
 5. **announce 140–143（20:11:00 修复）**：旧版 `curMsg=143` 前会 `awaiting=false` 卡住；当前版 `/actions` 提供 `announce_race/announce_attrib/announce_card/announce_number`，编码 **race/attrib=掩码、card=卡号、number=数值本身**（候选见 `/prompt.announceNumberValues`）。详见 §3.7.3。
+6. **prompt 空等 ~90s 会被服务端按 AFK `eof` 踢（MC 排位行为）**：`10:25:14` 版起 **`YGO_PROMPT_AUTO_DEFAULT_MS`（默认 60000，0=关）**：45s 先打 `PROMPT idle warning`，60s 无任何 `CTOS_RESPONSE` 则自动发**保守默认动作**（`PROMPT auto-default msg=.. seq=.. kind=.. after=..ms (idle guard, LLM silent)`），避免意外 EOF。可用 **`/prompt.awaitingSinceMs`** 看已等待毫秒。**不要依赖兜底**：正常决策要快；兜底只是保命。
 
 ### 0.2 十条铁律
 
@@ -284,6 +285,7 @@ loop:
 - 动作提交后客户端可能立刻置 `awaiting=false`（正常）；下一轮重新 `wait_prompt`。
 - 服务器对 `MSG_RETRY` 有计数（`/state.retryCount/retryStreak`）；连续重试说明编码/状态不对，**停下来重新读 `/actions`**，不要连发。
 - 非法合成响应（`realMsg != synthMsg`）会触发 RETRY 死循环；发现 `retryStreak` 上涨先 `control_state` 对 `curMsg`。
+- **60s 内答不了就别硬等**：`10:25:14` 版起客户端会按 `YGO_PROMPT_AUTO_DEFAULT_MS`（默认 60000）自动发保守默认（`to_ep`/`decline`/`no`/最小 select 等）保命；你能自己答就自己答（`/prompt.awaitingSinceMs` 看已等多久，别拖到 60s）。
 
 #### 3.7.1 `MSG_SORT_CARD`（洗牌/排序）的响应格式——裸字节、**无长度前缀**
 
@@ -474,7 +476,7 @@ control_act({ seq: <当前 seq>, hex: "000201" })
 
 | 组 | 字段 |
 |---|---|
-| 基础 | `seq` `curMsg` `turn` `awaiting` |
+| 基础 | `seq` `curMsg` `turn` `awaiting` `awaitingSinceMs`（等待已持续毫秒；>45s 有 `PROMPT idle warning`，60s 自动兜底） |
 | 可召唤计数 | `summonable` `spsummonable` `msetable` `ssetable` `reposable` `activatable` `attackable` `chains` `chainForced` `lastChain` |
 | 选卡 | `selectMin` `selectMax` `selectCancelable` `selectableCount` `selectableCards` |
 | 宣言 | `announceNumberValues`（仅 `MSG_ANNOUNCE_NUMBER(143)`：可用数值列表，`announce_number` 的候选；响应=数值本身） |
@@ -560,11 +562,12 @@ control_act({ seq: <当前 seq>, hex: "000201" })
 
 ### 6.1 动作节奏表
 
-> **启动客户端前的硬性配置**：`YGO_NET_DEAD_SILENCE_MS=600000`（**仅旧 exe 需要**；旧默认 10s 会误判 `confirmed_dead`。**当前版（20:11:00）默认已改为 60s，且我方回合/倒计时在走时不判死**；显式设 600000 对两版都安全）。
+> **启动客户端前的硬性配置**：`YGO_NET_DEAD_SILENCE_MS=600000`（**仅旧 exe 需要**；旧默认 10s 会误判 `confirmed_dead`。**当前版（20:11:00 起）默认 60s，且我方回合/倒计时在走时不判死**；显式设 600000 对两版都安全）。`10:25:14` 版另有 EOF guard：`YGO_PROMPT_AUTO_DEFAULT_MS=60000` / `YGO_PROMPT_IDLE_WARN_MS=45000`（默认即推荐值，一般不用改）。
 
 | 动作 | 建议间隔/超时 | 说明 |
 |---|---|---|
 | **`STOC_SELECT_TP`（先/后攻）** | **13s 硬上限**（当前版自动 ~2s；人工覆盖 <2s） | 超时服务端直接 `eof`；**最高优先级，收到即答** |
+| **prompt 空等** | **90s = 服务端 AFK 踢（`eof`）**；guard 60s（45s warning） | 别硬等；`/prompt.awaitingSinceMs` 可看等待时长；60s 后客户端自动发保守默认 |
 | `control_wait_prompt` | `timeout_ms` 20000–30000 | 长轮询；超时正常，重新调用即可（`since` 传上次 seq） |
 | `control_actions` → `control_act_id` | **立即**（<1s） | 拿到候选就选、提交；不要 sleep 思考太久 |
 | `control_act`（`MSG_SORT_CARD`） | **立即**，hex 裸字节无前缀 | 两张保持原序 = `hex:"0001"`；加前缀会死循环（§3.7.1） |
@@ -705,7 +708,8 @@ YGO_CONTROL_PORT=7789 YGO_TP=2 YGO_SIDE_AUTO=1 .\YGOPro.exe -h 127.0.0.1 -p 7911
 | 整场 `winPlayer` 仍是上局结果 | 旧客户端未重置 | `/state.match.game` 是否递增；日志 `DUEL_START reset` | 升级客户端（19:05:42+）；policy 用 `isWin` |
 | ready 发了但 `lobby.ready` 不变 | 卡组未加载/界面未到 | `/state.deckMain`,`/lobby`,日志 `ready: clicking HP_READY` | 先 `/deck`，再重试 ready |
 | 双方 ready 但 `started=false` | start latch / 没发 HS_START | `/state.started`,`/lobby.launchSeat`；日志 `STOC_DUEL_START` | 反复 `/start`（≤20 次，2–3s） |
-| **开局 `tpPending` 出现后突然 `eof`** | **TP 超过 13s 未答**（服务端踢） | 日志 `PROMPT publish seq=.. msg=TP` 后无 `TP choice`；`/net.closeReason=eof` | **TP 收到即答**（当前版自动 2s 内答先攻；人工覆盖 <2s） |
+| **开局 `tpPending` 出现后突然 `eof`** | **TP 超过 13s 未答**（服务端踢） | 日志 `PROMPT publish seq=.. msg=TP` 后无 `TP choice`；`/net.closeReason=eof` | **TP 收到即答**（当前版自动 2s 内答后攻 `res=2`；人工覆盖 <2s） |
+| **`eof` 前有 `PROMPT publish`、~88s 无 `SEND RESPONSE`** | **未答 AFK**（MC 排位 ~90s 踢；LAN srvpro 是 180s `TIMEOUT` 判负） | 日志 `PROMPT publish seq=.. msg=..` 后长时间无 `SEND RESPONSE`；`/prompt.awaitingSinceMs` 接近/超过 60s；`/net.closeReason=eof` | `10:25:14` 版 guard 默认 60s 自动兜底（`PROMPT auto-default ...`）；`0`=关（不建议）；LLM 侧 60s 内必答 |
 | **`/net.state=="confirmed_dead"`、提示管线冻结** | 旧 exe 默认 10s 静默误判；当前版默认 60s 且我方回合不判死 | `/net.state`,`/net.probe`,`/state.pipeline`；日志 `NET ALIVE reason=our-turn-idle` | 旧 exe 启动时设 `YGO_NET_DEAD_SILENCE_MS=600000`；当前版无需额外设置 |
 | **`sort`/排序反复同一条 prompt、`retryStreak` 涨** | 响应带了长度前缀（非裸字节） | `/state.curMsg` 不变、`MSG_RETRY`；`/state.pipeline.recentMsgs` | 改用 `control_act({seq, hex:"0001"})`（裸位序、无前缀），见 §3.7.1；当前版已实机验证（`hex=000102`） |
 | **`curMsg=143` 卡住、`awaiting=false`** | 旧版 announce prompt 未发布 | `/state.curMsg==143`、`/prompt.awaiting`；旧版日志无 announce prompt | 升级到 `20:11:00+`（`kPromptMsgs` 已含 ANNOUNCE_*）；用 `/actions` 的 `announce_number`（数值本身）或其 `announce_race/attrib/card`，见 §3.7.3 |
@@ -739,12 +743,13 @@ YGO_CONTROL_PORT=7789 YGO_TP=2 YGO_SIDE_AUTO=1 .\YGOPro.exe -h 127.0.0.1 -p 7911
 7. **UI 注入非 100%**：`place`/`attack` 偶发点击失效会直连回退（`UI fallback`，残余 5%~11%）。
 8. **策略与 LLM 不可同时跑**：会互相抢动作；二选一。
 9. **`/leave` 是 HTTP 端点**（MCP 无对应工具）：`POST http://127.0.0.1:7788/leave`。
-10. **指纹/构建**：本文档对应 `2026-11-15 20:11:00 / 6,323,712 B`；更旧 exe 缺 `/state.match`/side/announce 等字段，`control_match` 会降级（`fallback:true`）。
+10. **指纹/构建**：本文档对应 `2026-11-16 10:25:14 / 6,327,808 B`；更旧 exe 缺 `/state.match`/side/announce/`awaitingSinceMs` 等字段，`control_match` 会降级（`fallback:true`）。
 11. **多怪兽攻击目标——已修复（19:05:42 起，20:11:00 含）**：旧 exe 在 `MSG_SELECT_BATTLECMD` 的攻击目标选择会被内核拒绝（`curMsg` 15↔10 反复、攻击消耗不结算）；当前版已修复（LAN 实机 PASS）。旧 exe 仍降级：直接攻击/`to_m2`/`end_battle`/`to_ep`（见 §3.7.2）。
 12. **TP 自动应答（19:05:42 版起）**：控制驱动下默认 ~2s 自动答**后攻（`res=2`）**（`YGO_TP_AUTO`/`YGO_TP_AUTO_RES`，`YGO_TP_AUTO_RES=1` 可改先攻）；要人工覆盖必须 2s 内，13s 是服务端硬上限（见 §3.6 / §0.1）。
 13. **`MSG_SORT_CARD`——已实机验证（20:11:00 版）**：裸位序字节无前缀（`realMsg=25 len=3 hex=000102`），改直连字节、不再 UI fallback（`UI skip sort -> direct bytes`）。
 14. **announce 140–143——已修复（20:11:00 版），已实机验证**：见 §3.7.3。
-14. **判死阈值**：当前版默认 60s + 我方回合/倒计时在走不判死（`NET ALIVE reason=our-turn-idle`）；旧 exe 仍是 10s，必须设 `YGO_NET_DEAD_SILENCE_MS=600000`。
+15. **判死阈值**：当前版默认 60s + 我方回合/倒计时在走不判死（`NET ALIVE reason=our-turn-idle`）；旧 exe 仍是 10s，必须设 `YGO_NET_DEAD_SILENCE_MS=600000`。
+16. **prompt 空等 ~90s 会被 MC 排位按 AFK `eof` 踢；LAN srvpro 不踢 eof，而是 180s `TIMEOUT` 判负**（证据 `ranked/logs/eof-guard-validation.md`、`control-23776.log`）。`10:25:14` 版 guard 默认 60s 兜底（`YGO_PROMPT_AUTO_DEFAULT_MS`），`/prompt.awaitingSinceMs` 可看等待时长；别依赖兜底。
 
 ---
 

@@ -200,3 +200,19 @@
    - 状态：**已实机验证**（`ANNOUNCE number values=5` → `realMsg=143 i=1` → 下一 prompt `firstid=25(SORT_CARD)` 前进；无 RETRY/卡住）。全部 5 项修复已全绿。
 
 > 文档联动：`PLAYBOOK-FULL.md` §3.7.1（sort 已实机 `hex=000102`）、§3.7.2（攻击目标已修复）、**§3.7.3（announce 140–143）**、§0.1/§6.1（TP 自动/判死默认 60s）、§8（`curMsg=143` 排错）。
+
+---
+
+## 11. 2026-11-16 EOF guard（prompt 空等 → 服务端 AFK eof）
+
+- **现象（真实）**：prompt 已发布给 LLM，但调用方 ~88s 没有任何 `CTOS_RESPONSE` → MC 排位服务端按 AFK 直接 `eof` 踢人（证据 `control-23776.log`）。
+- **修复（`2026-11-16 10:25:14 / 6,327,808 / B2421E30…`）**：
+  - `YGO_PROMPT_AUTO_DEFAULT_MS`（默认 **60000**，`0`=关）：prompt 发布后超过该时间无任何 `CTOS_RESPONSE` → 自动发**保守默认动作**，日志 `PROMPT auto-default msg=.. seq=.. kind=.. after=..ms (idle guard, LLM silent)`；
+  - `YGO_PROMPT_IDLE_WARN_MS`（默认 **45000**）：先打 `PROMPT idle warning seq=.. msg=.. idle=..ms` 便于上层感知；
+  - `/prompt` 新增 **`awaitingSinceMs`**（等待已持续毫秒，仅 `awaiting=true` 时）。
+  - 默认动作：EFFECTYN/YESNO→否、CHAIN→decline（forced→第一 chain）、OPTION→0、IDLECMD→`to_ep`、BATTLECMD→`end_battle`、CARD→最小 select、PLACE→第一 place、POSITION→攻击、SORT→原序、ANNOUNCE_*→第一候选。
+- **验证（`ranked/logs/eof-guard-validation.md`）**：
+  - **positive PASS**：guard 20000ms（warning 10000ms）按住 prompt 30s → 10s warning、20s auto-default，`eof=0`；
+  - **fast PASS**：正常快速作答，auto-default 不触发；
+  - **negative PASS\***：`YGO_PROMPT_AUTO_DEFAULT_MS=0` → 无 auto-default；**LAN srvpro 不踢 eof，而是 180s `TIMEOUT` 判负**（与 MC 排位 ~90s eof 不同，`control-23776.log` 以 MC 为准）。
+- **对 LLM 的要求**：不要依赖 guard；正常 60s 内必须答（`/prompt.awaitingSinceMs` 可看等待时长）。guard 只是保命兜底。
