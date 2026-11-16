@@ -229,5 +229,25 @@
   - `/tip` 超时**不再单独判死**：只置 `probe_failed` 并打 `NET probe failed fails=.. (defer to passive silence guard)`；
   - 判死统一由被动静默阈值 `YGO_NET_DEAD_SILENCE_MS`（默认 60000）+ **我方回合/倒计时/`awaiting`/busy 守卫**决定（日志 `NET probe deferred (reason=our-turn/awaiting/busy/silence sinceStoc=..)`）；
   - 新增 `YGO_NET_PROBE_FAIL_MAX`（默认 **5**，仅控制降级/日志）。
-- **验证**：待 bot-scout 结果后补（positive/negative 用例与 `ranked/logs/` 证据）；当前结论以客户端源码/日志语义为准。
+- **验证（bot-scout，`ranked/logs/probe-fails-validation.md`）——A 组 PASS**：
+  - **probe 模式**（`YGO_NET_PROBE=1 YGO_NET_PROBE_FAIL_MAX=1`，静默 12s；`probe-fails-probe-20261116-114335`）：`NET probe timeout fails=1 sinceStoc=1516ms` → `NET probe failed fails=1 (defer to passive silence guard)`（×2）；`/net.alive=true`、`state=healthy`、`closeReason=none`；**`NET DEAD reason=probe-fails`=0、`NET disconnected`=0**；静默结束后恢复 `NET probe reply rtt=641ms`、对局继续。**VERDICT: PASS**
+  - **对照（probe 关闭 + 静默 70s；`probe-fails-passive-20261116-114625`）**：`NET DEAD reason=idle-no-packet since=60016ms` —— **被动判死路径仍有效**；probe 关闭时不会出现 probe 误判。**VERDICT: PASS**
+  - **EOF guard 回归**：positive PASS（`PROMPT idle warning ... idle=10000ms` → `PROMPT auto-default ... after=20000ms`，eof=0）、fast PASS（auto-default=0、34 次作答）；与 guard 互不干扰。
 - **对 LLM 的要求**：`/net.state == "probe_failed"` 或 `fails` 增长**不等于断线**（`alive` 仍 true）；对手长展开 7–8s 静默属正常，不要因为 `probe.fails` 提前 `/leave`。
+
+---
+
+## 13. 2026-11-16 攻击对手怪兽（选攻击对象）确定性验证 PASS
+
+- **背景**：用户反馈"从对手视角看到 `BATTLE_START` 后 `timeLeft` 冻结"，怀疑旧版 15↔10 选目标死循环仍在。做确定性 LAN 场景验证（不依赖 policy 随机）。
+- **确定性场景**（工具 `bridge/verify-battle-target-monster.ps1` + `.mjs`，证据 `ranked/logs/battle-target-monster-validation.md`）：
+  - host deck `battle-test`（40 张 4 星通常怪，ATK 1900–2000）、guest deck `battle-test-low`（40 张，ATK 1500）；
+  - 回合编排：双方先各召唤一只怪当靶子 → host 第 2 回合 `summon → to_bp → attack` → 出现 `MSG_SELECT_CARD(15)` 时对 selectable 第一张（对面的怪）提交 **raw `hex=0100`**（count=1 + `seqNo=0`）。
+- **结果（新 exe `11:31:00 / 6,328,320 / 8DBDCDFF…`）**：
+  - **单怪对单怪 2 连击**（`battle-target-monster-20261116-113956`）：`prompt=15 kind=bytes len=2 hex=0100` ×2、**`retry15=0`**、`firstid=110(MSG_BATTLE)=2`、guest LP **8000→7550→7100（每次 -450）**、eof=0。
+  - **2 怪连打对面 2 怪**（`battle-target-monster-20261116-114129`）：`hex=0100`、`retry15=0`、`msg110=2`、guest LP **8000→7500→7100**（-500/-400）、eof=0、`timeLeft` 正常走时未冻结。
+  - 6 次攻击序列（`battle-target-monster-20261116-112737`）：7 次 `MSG_BATTLE(110)`、guest 每次 -500（攻击对象是场上怪，非直击）、`RETRY after msg=15 = 0`。
+- **结论**：
+  - 当前 build 上"攻击对手怪兽并选目标"**正常**（`hex=0100` 被核心接受、战斗结算、无 15↔10 死循环、无 eof、`timeLeft` 不冻结）；
+  - 旧 15↔10 死循环在确定性 LAN 场景**未复现**（旧会话里的 13 个 10→15→10 窗口可能已被 select 直连/编码修复解决）；
+  - 用户在新版上"从对手侧看到 `BATTLE_START`/`timeLeft` 冻结"**更可能是对方客户端卡住/掉线**，不能归因我们的选目标路径；排查时先看对方 `/net`/决策是否在走。

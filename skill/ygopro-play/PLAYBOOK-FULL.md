@@ -696,6 +696,19 @@ YGO_CONTROL_PORT=7789 YGO_TP=2 YGO_SIDE_AUTO=1 .\YGOPro.exe -h 127.0.0.1 -p 7911
 
 > 排位脚本（`ranked-loop.ps1`）启动客户端前也必须设 `YGO_NET_DEAD_SILENCE_MS=600000`（旧 exe 默认 10s 会误判 `confirmed_dead`）。
 
+### 7.4 验证/复现工具清单（`bridge/` 下，2026-11-16 新增）
+
+| 工具 | 用途 | 产出/证据 |
+|---|---|---|
+| `verify-battle-target-monster.ps1` + `.mjs` | 确定性验证"攻击对手场上怪兽并选目标"（`battle-test` vs `battle-test-low`，提交 `hex=0100`） | `ranked/logs/battle-target-monster-<stamp>/`、`ranked/logs/battle-target-monster-validation.md` |
+| `verify-probe-fails.ps1` | 验证 `/tip` probe 超时只降级不判死（`-Mode probe|passive`） | `ranked/logs/probe-fails-<mode>-<stamp>/`、`ranked/logs/probe-fails-validation.md` |
+| `probe-fails-probe.mjs` | probe 验证的驱动：到指定侧"对手回合无 prompt"时静默 N 秒并采样 | 同上 |
+| `verify-eof-guard.ps1` | EOF guard 验证（`-Mode positive|fast|negative`，可配 `-AutoDefaultMs/-WarnMs/-IdleSec`） | `ranked/logs/eof-guard-<mode>-<stamp>/`、`ranked/logs/eof-guard-validation.md` |
+| `eof-guard-probe.mjs` | EOF guard 驱动：`--mode idle` 按住 prompt N 秒不答，采样 `/prompt`+`/state` | 同上 |
+| `battle-test.ydk` / `battle-test-low.ydk`（`mycard-bot/game/deck/`） | 攻击目标验证专用卡组（ATK 1900–2000 / 1500，4 星通常怪） | — |
+
+> 这些脚本/卡组由 lead 统一提交到 repo；本表只做索引。跑之前确认 `0 YGOPro / 0 node`，别和排位客户端抢 7788/7789/7911。
+
 ---
 
 ## 8. 排错表（症状 → 原因 → 检查 → 处理）
@@ -714,6 +727,7 @@ YGO_CONTROL_PORT=7789 YGO_TP=2 YGO_SIDE_AUTO=1 .\YGOPro.exe -h 127.0.0.1 -p 7911
 | **`sort`/排序反复同一条 prompt、`retryStreak` 涨** | 响应带了长度前缀（非裸字节） | `/state.curMsg` 不变、`MSG_RETRY`；`/state.pipeline.recentMsgs` | 改用 `control_act({seq, hex:"0001"})`（裸位序、无前缀），见 §3.7.1；当前版已实机验证（`hex=000102`） |
 | **`curMsg=143` 卡住、`awaiting=false`** | 旧版 announce prompt 未发布 | `/state.curMsg==143`、`/prompt.awaiting`；旧版日志无 announce prompt | 升级到 `20:11:00+`（`kPromptMsgs` 已含 ANNOUNCE_*）；用 `/actions` 的 `announce_number`（数值本身）或其 `announce_race/attrib/card`，见 §3.7.3 |
 | **多怪兽攻击目标选不了、`curMsg` 15↔10 反复** | **旧 exe** 战斗目标 bug（19:05:42 版已修复） | `/state.curMsg` 交替、攻击不结算 | 当前版正常选目标；旧 exe 降级：直接攻击 / `to_m2` / `end_battle` / `to_ep` |
+| **从对手视角看到我方 `BATTLE_START` 后 `timeLeft` 冻结** | 更可能是**对方客户端卡住/掉线**，不是我们的选目标 bug | 我方日志：`SEND RESPONSE realMsg=15 ... hex=0100`、`retry15=0`、`msg110`、LP 正常下降；对方 `/net`/决策是否在走 | 我方已确定性实测攻击怪兽 PASS（`hex=0100`/`retry15=0`/`eof=0`，`battle-target-monster-20261116-114129`）；先查对方，必要时重排 |
 | 进房后立刻被踢 | 密码错/房已关/被顶号 | `/net.closeReason`,`/chat`,`/state.errorMsg` | 重新排队；不要重复 join 同一房 |
 | 进房后 lobby 只有 `{pos:1,ready:true}` | ghost room（旧连接残留） | `/lobby.players`、`/net.uptimeMs` | `/leave` 重排；不要直连 arena 服“清理” |
 | 结算后卡住不动 | replay 保存对话框 | 日志 `STOC_REPLAY`；`/ui.popups` | 新客户端自动跳过（`replay: dialog skipped`）；旧客户端加 `YGO_SUPPRESS_MODALS` |
