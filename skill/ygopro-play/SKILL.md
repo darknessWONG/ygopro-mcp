@@ -57,7 +57,9 @@ while not state.match.over:
   control_act_id(选中的 id, seq=p.seq)
 ```
 
-选动作：`yesno` 按收益；`option` 按效果；`card/place` 用 prompt 里的 `selectableCards/placeOptions`（旧版 select 有攻击目标 bug，新 exe 已修）；`chain` 有反制才链；`position` 按场面；`idlecmd` 展开/结束；`side_ok` 见第 2 节第 9 步；`tp` 必须快。
+选动作：`yesno` 按收益；`option` 按效果；`card/place` 用 prompt 里的 `selectableCards/placeOptions`；`chain` 有反制才链；`position` 按场面；`idlecmd` 展开/结束；`side_ok` 见第 2 节第 9 步；`tp` 必须快。
+
+**攻击目标（`/prompt.isAttackTarget==true`）必须用 `kind:"select_card"` 按 `atk/def` 选最优者**（`15:18:21` 起每个候选一条，label 带 `atk/def/loc/seq`）；**不要用 `select_auto` 或旧 `id=0`**——单目标时它们永远打第一只（旧版"有对象攻击不结算"的根因）。多选（`selectMin>1`）才用 `select_auto`。
 
 **特殊响应**：`MSG_SORT_CARD` 用裸字节（`hex="0001"` 保持原序、无前缀；20:11:00 已实机验证 `hex=000102` 直连字节）；`MSG_SELECT_PLACE` 用 `(ctrl,loc,seq)` 三字节；`announce_*`（140–143）的 `announce_number` 响应=**数值本身**（不是下标，候选见 `/prompt.announceNumberValues`），`announce_race/attrib`=掩码、`announce_card`=卡号。
 
@@ -87,6 +89,7 @@ while not state.match.over:
 | 卡 `STOC_CHANGE_SIDE` | `state.side.pending` | 两侧 `control_side_done` |
 | `side_ok` 报 `counts must match` | 换备不守恒 | 换回等量再 done |
 | 攻击目标提交无效（旧版） | `curMsg` 15↔10 反复 | 升级 exe；否则降级直接攻击/to_m2/end_battle |
+| 目标窗总是打第一只/选完不结算 | 旧版 `/actions` 只有一条 `select`（≤11:31:00） | 升级 `15:18:21+`；用 `kind:"select_card"` 显式选（`isAttackTarget=true` 时） |
 | 排序 prompt 死循环 | `curMsg==25` 反复 | `control_act({seq, hex:"0001"})` 裸字节重发；20:11:00 已改直连字节 |
 | 卡在 `curMsg==143`、`awaiting=false` | 旧版 announce prompt 未发布 | 升级 20:11:00+；用 `/actions` 的 `announce_number`（数值本身）/`announce_race/attrib/card` |
 | `stale action id` | `/act_id` 的 seq 旧了 | 重新 `control_actions` 再发 |

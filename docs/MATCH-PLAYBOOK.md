@@ -79,7 +79,7 @@ GET /act_id?id=1     # 后攻（index=2）
 **三个特殊响应格式**：
 
 - **`MSG_SORT_CARD`（洗牌/排序）**：响应用**裸位序字节、无长度前缀**——两张卡保持原序 = `hex=0001`。用 `GET /act?seq=..&hex=0001`（或 MCP `control_act({seq, hex:"0001"})`）。**加长度前缀会死循环**（内核反复发同一条 prompt、`retryStreak` 涨）。**20:11:00 版已实机验证**（`realMsg=25 len=3 hex=000102`，并改直连字节 `UI skip sort -> direct bytes`）。
-- **多怪兽攻击目标——已修复（19:05:42 起，20:11:00 含）**：旧版本选攻击目标被内核拒绝（`curMsg` 15↔10 反复、攻击不结算）；当前版已修复（LAN 实机 PASS：`send15=2 retry15=0`、`hex=0100`、LP 8000→3900→1850、`loops=0`）。旧 exe 仍降级：直接攻击 / `to_m2` / `end_battle` / `to_ep`。
+- **多怪兽攻击目标——已修复（19:05:42 起，20:11:00 含；15:18:21 起逐卡选）**：旧版本选攻击目标被内核拒绝（`curMsg` 15↔10 反复、攻击不结算）；当前版已修复（LAN 实机 PASS：`send15=2 retry15=0`、`hex=0100`、LP 8000→3900→1850、`loops=0`）。**`15:18:21` 起 `MSG_SELECT_CARD` 每个候选一条 `kind:"select_card"`（label 带 `atk/def/loc/seq`），攻击目标必须按 `atk/def` 显式选；`select_auto`/旧 `id=0` 永远打第一只**。旧 exe 仍降级：直接攻击 / `to_m2` / `end_battle` / `to_ep`。
 - **`announce` 140–143（20:11:00 修复，已实机验证）**：`/actions` 会给 `announce_race/announce_attrib/announce_card/announce_number`；编码：**race/attrib=掩码、card=卡号、number=数值本身**（不是下标，候选见 `/prompt.announceNumberValues`）。旧版会在 `curMsg=143` 前 `awaiting=false` 卡住 → 升级。
 
 ## 6. 一局之间：换备牌（Bo3 关键步骤）

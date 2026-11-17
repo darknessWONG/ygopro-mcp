@@ -251,3 +251,22 @@
   - 当前 build 上"攻击对手怪兽并选目标"**正常**（`hex=0100` 被核心接受、战斗结算、无 15↔10 死循环、无 eof、`timeLeft` 不冻结）；
   - 旧 15↔10 死循环在确定性 LAN 场景**未复现**（旧会话里的 13 个 10→15→10 窗口可能已被 select 直连/编码修复解决）；
   - 用户在新版上"从对手侧看到 `BATTLE_START`/`timeLeft` 冻结"**更可能是对方客户端卡住/掉线**，不能归因我们的选目标路径；排查时先看对方 `/net`/决策是否在走。
+
+---
+
+## 14. 2026-11-17 有对象攻击的选择修复（逐卡 `select_card`）
+
+- **现象（用户报告）**：攻击目标窗里看到两只候选（如 3000 / 1500），提交后**我方两只怪进墓地、对方 LP 不变**——实际是动作永远选中候选 `[0]`（那只是 3000 的对手怪，反击把攻击者打死），并没有按用户意图选 1500。
+- **根因**：旧版 `BuildSemActions` 对 `MSG_SELECT_CARD` 只生成**一条** `select` 动作，编码永远取 `selectableList[0]`；LLM 无论选哪条 id 都落到同一张卡 → "总是打第一只 / 有对象的攻击不结算"。
+- **修复（`15:18:21 / 6,329,344 / 7C7FB684…`）**：
+  - `/actions` 对 `MSG_SELECT_CARD/TRIBUTE/UNSELECT_CARD`（`selectMin<=1`）**每个候选一条 `kind:"select_card"`**（`index=i`，label `attack target: card #i code=.. atk=.. def=.. loc=.. seq=..`），另保留 `kind:"select_auto"` 兜底；
+  - 编码：`select_card` → `[1][候选 seqNo]`；`select_auto` → `[n][seqNo...]`；单目标 `id=0` 仍等价旧行为（兼容）；
+  - `/prompt.selectableCards[]` 新增 `position`；战斗目标窗新增 **`isAttackTarget:true`**；
+  - 日志：`SELECT picked=i code=.. seqNo=..`、`SEND RESPONSE picked=.. (select_card)`。
+- **验证（bot-scout `attack-target-choice-validation.md`）A–E PASS**：
+  - **A** 显式选 1500 → `SELECT picked=1` → 对方 LP 8000→7900（-100），我方攻击怪存活；
+  - **B** 显式选 1900 → `SELECT picked=0` → 我方 LP 8000→7700（-300）、我方怪死亡、对方 LP 不变（证明选择生效）；
+  - **C** `select_auto` 等价旧行为（第一只）；
+  - **D** 直击回归正常；
+  - **E** 多怪 2v2 两次 picked 均按期望；全程无 `RETRY after msg=15`、无 eof。
+- **对 LLM 的要求**：`/prompt.isAttackTarget==true` 时**必须**用 `select_card` 按 `atk/def`（或局面收益）显式选；**不要用 `select_auto` / 旧 `id=0`**，否则永远打第一只。

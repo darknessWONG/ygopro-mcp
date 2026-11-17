@@ -2,7 +2,7 @@
 
 > **读者**：要真正操作这套桥接去排位/局域网打牌的 LLM agent（以及维护它的工程师）。
 > **目标**：零歧义——每一步"做什么、调什么、返回什么、怎么判定成功/失败、失败怎么修"。
-> **当前客户端构建**：`2026-11-16 11:31:00 / 6,328,320 B`，SHA256 `8DBDCDFFC4BD58E40D74DBD5A697A68ECFD916DD9426298696864C0304E8A59F`（`node doctor.mjs --client <exe> --strict-build` 可校验）。
+> **当前客户端构建**：`2026-11-17 15:18:21 / 6,329,344 B`，SHA256 `7C7FB6841BEC30B8A8D81FDC06EFD723710434403214B3C4FEFA787C868C6423`（`node doctor.mjs --client <exe> --strict-build` 可校验）。
 > **权威性**：本文是操作流程的权威；字段级契约见 [`MCP-INTERFACE.md`](MCP-INTERFACE.md)，排位实战记录见 [`RANKED-REPORT.md`](RANKED-REPORT.md)，精简单页见 [`MATCH-PLAYBOOK.md`](MATCH-PLAYBOOK.md)。
 > **本文所有示例字段名都按当前客户端真实输出**（可对照 `ranked/logs/playbook-samples/` 下的真实采样）。
 
@@ -274,7 +274,9 @@ loop:
 | `option` | 多效果选择 | 选第 N 个（默认 0 可能不是最优） |
 | `position` | 表示形式 | `attack`/`defense` |
 | `place` | 放格子 | 选合法格（label 带 bit/mask/ctrl/loc/seq） |
-| `select` | 选卡 | 选前 N 张（N=`selectMin`） |
+| `select` | 选卡（旧版唯一一条） | 选前 N 张（N=`selectMin`）——单目标时**永远选第一只**，攻击目标别用 |
+| **`select_card`（15:18:21 起，单目标）** | `MSG_SELECT_CARD/TRIBUTE/UNSELECT_CARD` | **每个候选一条**（`index=i`，label `attack target: card #i code=.. atk=.. def=.. loc=.. seq=..`）；**攻击目标必须按 `atk/def` 选这张**（编码 `[1][seqNo]`） |
+| **`select_auto`（15:18:21 起）** | 同上 | 兜底：`[n][seqNo...]`；**单目标 = 永远第一只（旧行为）**——有对象的攻击不要用 |
 | `sum`/`counter`/`sort`/`announce` | 素材/指示物/排序/宣言 | 安全默认；**`sort` 必须用 `control_act` 的裸字节 hex，见 §3.7.1** |
 | `auto` | 无 UI 分支的确认类 | 选它（安全默认） |
 | `tp`/`side_ok` | 开局前/换备 | 见 §3.6/§3.9 |
@@ -286,6 +288,7 @@ loop:
 - 服务器对 `MSG_RETRY` 有计数（`/state.retryCount/retryStreak`）；连续重试说明编码/状态不对，**停下来重新读 `/actions`**，不要连发。
 - 非法合成响应（`realMsg != synthMsg`）会触发 RETRY 死循环；发现 `retryStreak` 上涨先 `control_state` 对 `curMsg`。
 - **60s 内答不了就别硬等**：`10:25:14` 版起客户端会按 `YGO_PROMPT_AUTO_DEFAULT_MS`（默认 60000）自动发保守默认（`to_ep`/`decline`/`no`/最小 select 等）保命；你能自己答就自己答（`/prompt.awaitingSinceMs` 看已等多久，别拖到 60s）。
+- **攻击目标必须用 `select_card` 按 `atk/def` 选**（`15:18:21` 版起）：`/prompt.isAttackTarget==true` 时，`/actions` 会为**每个候选**给一条 `kind:"select_card"`（label `attack target: card #i code=.. atk=.. def=.. loc=.. seq=..`）；选哪个 id 由你按 `atk/def` 决定。**不要用 `select_auto` / 旧 `id=0`**——单目标时它们永远选 `selectable[0]`，这正是旧版"有对象攻击不结算/总是打第一只"的根因。`select_card` 编码：`[1][候选 seqNo]`；多选（`selectMin>1`）才用 `select_auto`（`[n][seqNo...]`）。
 
 #### 3.7.1 `MSG_SORT_CARD`（洗牌/排序）的响应格式——裸字节、**无长度前缀**
 
@@ -478,7 +481,7 @@ control_act({ seq: <当前 seq>, hex: "000201" })
 |---|---|
 | 基础 | `seq` `curMsg` `turn` `awaiting` `awaitingSinceMs`（等待已持续毫秒；>45s 有 `PROMPT idle warning`，60s 自动兜底） |
 | 可召唤计数 | `summonable` `spsummonable` `msetable` `ssetable` `reposable` `activatable` `attackable` `chains` `chainForced` `lastChain` |
-| 选卡 | `selectMin` `selectMax` `selectCancelable` `selectableCount` `selectableCards` |
+| 选卡 | `selectMin` `selectMax` `selectCancelable` `selectableCount` `selectableCards`（每项含 `i/code/atk/def/lv/position/loc/seqNo`）；**`isAttackTarget`**（`15:18:21` 起：战斗目标窗=true，必须用 `select_card` 按 `atk/def` 选） |
 | 宣言 | `announceNumberValues`（仅 `MSG_ANNOUNCE_NUMBER(143)`：可用数值列表，`announce_number` 的候选；响应=数值本身） |
 | 阶段 | `canBp` `canEp` |
 | 候选卡 | `summonableCards` `spsummonableCards` `msetableCards` `ssetableCards` `activatableCards` `attackableCards` |
@@ -727,6 +730,7 @@ YGO_CONTROL_PORT=7789 YGO_TP=2 YGO_SIDE_AUTO=1 .\YGOPro.exe -h 127.0.0.1 -p 7911
 | **`sort`/排序反复同一条 prompt、`retryStreak` 涨** | 响应带了长度前缀（非裸字节） | `/state.curMsg` 不变、`MSG_RETRY`；`/state.pipeline.recentMsgs` | 改用 `control_act({seq, hex:"0001"})`（裸位序、无前缀），见 §3.7.1；当前版已实机验证（`hex=000102`） |
 | **`curMsg=143` 卡住、`awaiting=false`** | 旧版 announce prompt 未发布 | `/state.curMsg==143`、`/prompt.awaiting`；旧版日志无 announce prompt | 升级到 `20:11:00+`（`kPromptMsgs` 已含 ANNOUNCE_*）；用 `/actions` 的 `announce_number`（数值本身）或其 `announce_race/attrib/card`，见 §3.7.3 |
 | **多怪兽攻击目标选不了、`curMsg` 15↔10 反复** | **旧 exe** 战斗目标 bug（19:05:42 版已修复） | `/state.curMsg` 交替、攻击不结算 | 当前版正常选目标；旧 exe 降级：直接攻击 / `to_m2` / `end_battle` / `to_ep` |
+| **攻击目标窗只有一条动作 / 总是打第一只 / 选完不结算** | **旧版 `/actions` 缺陷（≤11:31:00）**：只有一条 `select`（永远 `selectable[0]`） | `/prompt.isAttackTarget`、`/actions` 是否出现多条 `select_card`、日志 `SELECT picked=` | 升级到 `15:18:21+`；新版用 `select_card` 显式选（`id` 按 atk/def） |
 | **从对手视角看到我方 `BATTLE_START` 后 `timeLeft` 冻结** | 更可能是**对方客户端卡住/掉线**，不是我们的选目标 bug | 我方日志：`SEND RESPONSE realMsg=15 ... hex=0100`、`retry15=0`、`msg110`、LP 正常下降；对方 `/net`/决策是否在走 | 我方已确定性实测攻击怪兽 PASS（`hex=0100`/`retry15=0`/`eof=0`，`battle-target-monster-20261116-114129`）；先查对方，必要时重排 |
 | 进房后立刻被踢 | 密码错/房已关/被顶号 | `/net.closeReason`,`/chat`,`/state.errorMsg` | 重新排队；不要重复 join 同一房 |
 | 进房后 lobby 只有 `{pos:1,ready:true}` | ghost room（旧连接残留） | `/lobby.players`、`/net.uptimeMs` | `/leave` 重排；不要直连 arena 服“清理” |
@@ -759,8 +763,8 @@ YGO_CONTROL_PORT=7789 YGO_TP=2 YGO_SIDE_AUTO=1 .\YGOPro.exe -h 127.0.0.1 -p 7911
 7. **UI 注入非 100%**：`place`/`attack` 偶发点击失效会直连回退（`UI fallback`，残余 5%~11%）。
 8. **策略与 LLM 不可同时跑**：会互相抢动作；二选一。
 9. **`/leave` 是 HTTP 端点**（MCP 无对应工具）：`POST http://127.0.0.1:7788/leave`。
-10. **指纹/构建**：本文档对应 `2026-11-16 11:31:00 / 6,328,320 B`；更旧 exe 缺 `/state.match`/side/announce/`awaitingSinceMs` 等字段，`control_match` 会降级（`fallback:true`）。
-11. **多怪兽攻击目标——已修复（19:05:42 起，20:11:00 含）**：旧 exe 在 `MSG_SELECT_BATTLECMD` 的攻击目标选择会被内核拒绝（`curMsg` 15↔10 反复、攻击消耗不结算）；当前版已修复（LAN 实机 PASS）。旧 exe 仍降级：直接攻击/`to_m2`/`end_battle`/`to_ep`（见 §3.7.2）。
+10. **指纹/构建**：本文档对应 `2026-11-17 15:18:21 / 6,329,344 B`；更旧 exe 缺 `/state.match`/side/announce/`awaitingSinceMs`/`select_card` 等，`control_match` 会降级（`fallback:true`）。
+11. **多怪兽攻击目标——已修复（19:05:42 起，20:11:00 含；15:18:21 起可逐卡选）**：旧 exe 在 `MSG_SELECT_BATTLECMD` 的攻击目标选择会被内核拒绝（`curMsg` 15↔10 反复、攻击消耗不结算）；当前版已修复（LAN 实机 PASS）。**`15:18:21` 起 `select_card` 可按 `atk/def` 选具体目标；`select_auto` 仍等价旧"永远第一只"（只作多选兜底）**。旧 exe 仍降级：直接攻击/`to_m2`/`end_battle`/`to_ep`（见 §3.7.2）。
 12. **TP 自动应答（19:05:42 版起）**：控制驱动下默认 ~2s 自动答**后攻（`res=2`）**（`YGO_TP_AUTO`/`YGO_TP_AUTO_RES`，`YGO_TP_AUTO_RES=1` 可改先攻）；要人工覆盖必须 2s 内，13s 是服务端硬上限（见 §3.6 / §0.1）。
 13. **`MSG_SORT_CARD`——已实机验证（20:11:00 版）**：裸位序字节无前缀（`realMsg=25 len=3 hex=000102`），改直连字节、不再 UI fallback（`UI skip sort -> direct bytes`）。
 14. **announce 140–143——已修复（20:11:00 版），已实机验证**：见 §3.7.3。
