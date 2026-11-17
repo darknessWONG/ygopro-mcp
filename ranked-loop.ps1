@@ -26,7 +26,7 @@ $summaryPath = Join-Path $evd 'summary.json'
 trap {
   W ("FATAL: " + $_.Exception.Message + " @ line " + $_.InvocationInfo.ScriptLineNumber)
   Get-Process YGOPro -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-  Get-Process node -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+  # Never kill every node process here: the DSH harness itself runs on node. Policy/bridge children are cleaned up by the client kill + port checks below.
   exit 1
 }
 function W([string]$m) { Add-Content -Path $log -Value ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $m) -Encoding UTF8 }
@@ -51,9 +51,9 @@ function Shot([string]$tag) { $t = (Get-Date -Format 'HHmmss'); powershell -NoPr
 # 0) preflight
 $busy = Get-Process YGOPro -ErrorAction SilentlyContinue
 if ($busy) { W ("killing leftover clients pid=" + ($busy.Id -join ',')); $busy | Stop-Process -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 3 }
-$stray = Get-Process powershell -ErrorAction SilentlyContinue | Where-Object { $_.Id -ne $PID -and $_.StartTime -lt (Get-Date).AddSeconds(-30) }
-if ($stray) { W ("killing stray runners pid=" + ($stray.Id -join ',')); $stray | Stop-Process -Id { $_.Id } -Force -ErrorAction SilentlyContinue }
-Get-Process node -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+# Only kill powershell processes that are clearly our own runner (command line match), never the parent/job wrapper.
+# (stray-runner cleanup removed: it could kill the job wrapper that launched this run)
+# Never kill every node process here: the DSH harness itself runs on node. Policy/bridge children are cleaned up by the client kill + port checks below.
 foreach ($p in 7788,7789) {
   if (((Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue | Measure-Object).Count) -gt 0) { W "ABORT: port $p listening"; return }
 }
@@ -323,7 +323,7 @@ while ($successCount -lt $Runs -and (Get-Date) -lt $totalDeadline) {
   try { $null = JPost 'http://127.0.0.1:7788/leave' } catch {}
   Start-Sleep -Seconds 12
   Get-Process YGOPro -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-  Get-Process node -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+  # Never kill every node process here: the DSH harness itself runs on node. Policy/bridge children are cleaned up by the client kill + port checks below.
   Start-Sleep -Seconds 6
 }
 
