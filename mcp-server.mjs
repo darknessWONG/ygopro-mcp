@@ -215,7 +215,8 @@ const TOOLS = [
     name: 'control_prompt',
     description:
       'Read the CURRENT prompt snapshot without waiting (GET /prompt): seq, awaiting, curMsg, the pending-decision counters (summonable/activatable/chains/...) and the semantic flags (tpPending / sidePending / canBp / canEp). ' +
-      'Use it to inspect "what is being asked right now"; use control_wait_prompt when you need to BLOCK until the next prompt arrives.',
+      'Use it to inspect "what is being asked right now"; use control_wait_prompt when you need to BLOCK until the next prompt arrives. ' +
+      'selectableCards[] lists every candidate of a card-selection prompt (code/atk/def/loc/seq/position) and isAttackTarget=true marks a battle target window.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
@@ -251,12 +252,13 @@ const TOOLS = [
   },
   {
     name: 'control_actions',
-    description: 'List the semantic actions available for the current prompt (id + kind + human label, e.g. summon/special summon/attack/chain/zone). The caller only picks an id; the client encodes the kernel response itself.',
+    description: 'List the semantic actions available for the current prompt (id + kind + human label, e.g. summon/special summon/attack/chain/zone). The caller only picks an id; the client encodes the kernel response itself. ' +
+      'For MSG_SELECT_CARD the list contains ONE entry per candidate: kind select_card, label "attack target: card #i code=.. atk=.. def=.. loc=.. seq=.." (the prefix appears for battle target windows), plus a select_auto entry that keeps the legacy "pick the first N" behaviour. To choose a specific card (for example which monster to attack) pass the matching select_card id - select_auto always takes the first candidate and is usually wrong when several targets are legal.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
     name: 'control_act_id',
-    description: 'Execute one of the actions returned by control_actions, by id.',
+    description: 'Execute one of the actions returned by control_actions, by id. Prefer the semantic entry you actually want: for card selection pass the select_card id whose label matches the card (attack target: card #i code=.. atk=.. def=..); select_auto / legacy id=0 means "take the first candidate" and is kept for compatibility.',
     inputSchema: { type: 'object', properties: { id: { type: 'number' } }, required: ['id'], additionalProperties: false },
   },
   {
