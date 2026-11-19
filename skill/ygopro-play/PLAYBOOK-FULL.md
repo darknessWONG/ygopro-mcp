@@ -2,7 +2,7 @@
 
 > **读者**：要真正操作这套桥接去排位/局域网打牌的 LLM agent（以及维护它的工程师）。
 > **目标**：零歧义——每一步"做什么、调什么、返回什么、怎么判定成功/失败、失败怎么修"。
-> **当前客户端构建**：`2026-11-17 15:18:21 / 6,329,344 B`，SHA256 `7C7FB6841BEC30B8A8D81FDC06EFD723710434403214B3C4FEFA787C868C6423`（`node doctor.mjs --client <exe> --strict-build` 可校验）。
+> **当前客户端构建**：`2026-11-19 17:33:31 / 6,330,368 B`，SHA256 `EC2B9CD1174247B742A77B1A49604F762D5B8D5B3092DC2D3230761A9E16BAF1`（`node doctor.mjs --client <exe> --strict-build` 可校验）。
 > **权威性**：本文是操作流程的权威；字段级契约见 [`MCP-INTERFACE.md`](MCP-INTERFACE.md)，排位实战记录见 [`RANKED-REPORT.md`](RANKED-REPORT.md)，精简单页见 [`MATCH-PLAYBOOK.md`](MATCH-PLAYBOOK.md)。
 > **本文所有示例字段名都按当前客户端真实输出**（可对照 `ranked/logs/playbook-samples/` 下的真实采样）。
 
@@ -18,7 +18,7 @@
 4. **多怪兽攻击目标（当前版已修复）**：旧版本 `MSG_SELECT_BATTLECMD`/攻击目标选择会被内核拒绝（`curMsg` 15↔10 反复、攻击消耗不结算）。**19:05:42 起、20:11:00 最终版含修复**（`selectMin==0→[0]`、select 直连字节、stale seq/snapshot 防护；LAN 实机 PASS：`send15=2 retry15=0`、`hex=0100`、LP 8000→3900→1850、`loops=0`）。旧 exe 遇到时仍**降级为直接攻击/结束战斗阶段**。
 5. **announce 140–143（20:11:00 修复）**：旧版 `curMsg=143` 前会 `awaiting=false` 卡住；当前版 `/actions` 提供 `announce_race/announce_attrib/announce_card/announce_number`，编码 **race/attrib=掩码、card=卡号、number=数值本身**（候选见 `/prompt.announceNumberValues`）。详见 §3.7.3。
 6. **prompt 空等 ~90s 会被服务端按 AFK `eof` 踢（MC 排位行为）**：`10:25:14` 版起 **`YGO_PROMPT_AUTO_DEFAULT_MS`（默认 60000，0=关）**：45s 先打 `PROMPT idle warning`，60s 无任何 `CTOS_RESPONSE` 则自动发**保守默认动作**（`PROMPT auto-default msg=.. seq=.. kind=.. after=..ms (idle guard, LLM silent)`），避免意外 EOF。可用 **`/prompt.awaitingSinceMs`** 看已等待毫秒。**不要依赖兜底**：正常决策要快；兜底只是保命。
-7. **掉线要自己查（`control_net`）**：长回合/对手长考/换备等对手时，**每 15–30s 调一次 `control_net`**（客户端 `net.heartbeat` 日志也是 15s 一条）。只有 `alive=false` 或 `state=confirmed_dead/disconnected` 才处理；`state=probe_failed`/`fails` 增长不是断线。`17:33:31` 版起看门狗已修（`clockFresh` 3s 内刷新才算倒计时在走，`our-turn-idle` 不再因过期 `g_timeLeft` 永远豁免），但仍建议 LLM 主动轮询（长考时别只等客户端判死）。**别再设 `YGO_NET_DEAD_SILENCE_MS=600000`**：默认 60000 即可、最多 120000。
+7. **掉线要自己查（`control_net`）**：长回合/对手长考/换备等对手时，**每 15–30s 调一次 `control_net`**（客户端 `net.heartbeat` 空闲时每 15s 一条；连续操作时不打，属正常）。只有 `alive=false` 或 `state=confirmed_dead/disconnected` 才处理；`state=probe_failed`/`fails` 增长不是断线。`17:33:31` 版起看门狗已修（`clockFresh` 3s 内刷新才算倒计时在走，`our-turn-idle` 不再因过期 `g_timeLeft` 永远豁免），但仍建议 LLM 主动轮询（长考时别只等客户端判死）。**别再设 `YGO_NET_DEAD_SILENCE_MS=600000`**：默认 60000 即可、最多 120000。
 
 ### 0.2 十条铁律
 
@@ -576,7 +576,7 @@ control_act({ seq: <当前 seq>, hex: "000201" })
 | `control_actions` → `control_act_id` | **立即**（<1s） | 拿到候选就选、提交；不要 sleep 思考太久 |
 | `control_act`（`MSG_SORT_CARD`） | **立即**，hex 裸字节无前缀 | 两张保持原序 = `hex:"0001"`；加前缀会死循环（§3.7.1） |
 | `control_state` 轮询 | 2–3s | 监控用；不要 100ms 级轮询 |
-| **`control_net`（掉线检查）** | **每 15–30s**（`net.heartbeat` 日志每 15s） | 长回合/对手长考/等换备时必查；`alive=false` 或 `state=confirmed_dead/disconnected` 才处理 |
+| **`control_net`（掉线检查）** | **每 15–30s**（`net.heartbeat` 空闲时每 15s 打一条；连续操作时不打=正常） | 长回合/对手长考/等换备时必查；`alive=false` 或 `state=confirmed_dead/disconnected` 才处理 |
 | `/ready` | 每 1–2s，≤30 次 | 直到 `lobby.ready[self]==1` |
 | `/start` | 每 2–3s，≤20 次 | 直到 `state.started==true` |
 | `/side_swap` 后重试 | 100–300ms | 等 UI 线程落地；读 `/state.side.counts` 确认 |
@@ -774,7 +774,7 @@ YGO_CONTROL_PORT=7789 YGO_TP=2 YGO_SIDE_AUTO=1 .\YGOPro.exe -h 127.0.0.1 -p 7911
 15. **判死阈值**：当前版默认 60s + 我方回合/倒计时/awaiting/busy 不判死（`NET ALIVE reason=our-turn-idle`）；旧 exe 仍是 10s，必须设 `YGO_NET_DEAD_SILENCE_MS=600000`。
 16. **prompt 空等 ~90s 会被 MC 排位按 AFK `eof` 踢；LAN srvpro 不踢 eof，而是 180s `TIMEOUT` 判负**（证据 `ranked/logs/eof-guard-validation.md`、`control-23776.log`）。`10:25:14` 版 guard 默认 60s 兜底（`YGO_PROMPT_AUTO_DEFAULT_MS`），`/prompt.awaitingSinceMs` 可看等待时长；别依赖兜底。
 17. **probe（`/tip`）误判——已修复（11:31:00 版）**：旧版 probe 2 次超时即 `NET DEAD reason=probe-fails` + 断线（对手长展开 7.5s 静默被误踢）；新版只降级 `probe_failed`（`YGO_NET_PROBE_FAIL_MAX=5` 仅日志/降级），判死走被动静默。**服务端自身断线无法预防**（该限制保留）。
-18. **掉线检测**：`17:33:31` 版起看门狗已修（`g_timeLeftTick` + `clockRunning = ourTurn && clockFresh<3s`、`effSilence=max(env, oppTurn?60000)`、heartbeat 每 15s、`/net` 有 `ourTurn/oppTurn/timeLeft/clockFresh`）；_旧版_ 的过期 `g_timeLeft` 会让豁免永远成立（`NET ALIVE reason=our-turn-idle timeLeft=240` 一直 ALIVE）。**仍建议每 15–30s 调 `control_net` 自查**：`idle-no-packet`=被动静默判死、`disconnected`=socket 断、`probe_failed` 单独出现不是断线。`YGO_NET_DEAD_SILENCE_MS` 用默认 **60000**（最多 120000），**不要 600000**。
+18. **掉线检测**：`17:33:31` 版起看门狗已修（`g_timeLeftTick` + `clockRunning = ourTurn && clockFresh<3s`、`effSilence=max(env, oppTurn?60000)`、`/net` 有 `ourTurn/oppTurn/timeLeft/clockFresh`）；_旧版_ 的过期 `g_timeLeft` 会让豁免永远成立（`NET ALIVE reason=our-turn-idle timeLeft=240` 一直 ALIVE）。**仍建议每 15–30s 调 `control_net` 自查**：`idle-no-packet`=被动静默判死、`disconnected`=socket 断、`probe_failed` 单独出现不是断线。`YGO_NET_DEAD_SILENCE_MS` 用默认 **60000**（最多 120000），**不要 600000**。`net.heartbeat` 只在**空闲（`since>10s`）时每 15s** 打一条，连续操作/有包时不打——不是故障；要"无条件定时心跳"需后续版本。
 
 ---
 

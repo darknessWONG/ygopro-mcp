@@ -280,7 +280,13 @@
   - 客户端新增 `g_timeLeftTick`（最后一次 timeLeft 更新的时间戳）；
   - `clockRunning = ourTurn && clockFresh(<3s)`——倒计时只有 **3s 内刚刷新**才算"在走"，否则不构成豁免；
   - `effSilence = max(YGO_NET_DEAD_SILENCE_MS, oppTurn ? 60000 : 0)`（对手回合至少 60s 静默才判）；
-  - 客户端 `net.heartbeat` 每 **15s** 一条；`/net` 新增 `ourTurn/oppTurn/timeLeft/clockFresh` 诊断字段。
+  - 客户端 `net.heartbeat` **空闲（`since>10s`）时每 15s** 一条；`/net` 新增 `ourTurn/oppTurn/timeLeft/clockFresh` 诊断字段。
+  - 已知细节：heartbeat 只在空闲计时路径打印，**连续操作/有包时不打**——不是故障（静默看门狗诊断）；若需要"无条件定时心跳"需后续版本加，不在本版。
 - **配置建议**：**不要再长期设 `YGO_NET_DEAD_SILENCE_MS=600000`**（真掉线 10 分钟才发现）；用默认 **60000** 即可，最多 120000。
-- **验证**：bot-scout 正在跑（silence 判死 / ourturn 不误判 / normal 回归三组），PASS 后本节补证据（`ranked/logs/`）。
+- **验证（bot-scout `ranked/logs/net-watchdog-validation.md`）4/4 PASS**：
+  1. **对手静默 → 判死 PASS**（`net-watchdog-silence-20261119-175110`）：`NET DEAD reason=idle-no-packet since=60016ms eff=60000ms oppTurn=1 ourTurn=0 clockFresh=0`，随后 `NET alive recovered (hits=2 stoc=STOC_TIME_LIMIT)`（真实包恢复 alive，预期）；同一时刻我方回合侧只有 `NET silence diag`、**无 `NET DEAD`**。
+  2. **我方回合 idle 25s → 不判死 PASS**（`net-watchdog-ourturn-20261119-175911`）：被测侧无 `NET DEAD`、`clockFresh=true` 采样可见（`ourTurn` 豁免生效）。
+  3. **正常对局 2min → 不误判 PASS**（`net-watchdog-normal-20261119-180524`）：`deadLines=0`、`disconnect=0`、`alive` 持续 true（43 次采样）。
+  4. **真实断开 → `/net` 正确反映 PASS**（`net-watchdog-eof-20261119-180925`）：`{"connected":false,"closeReason":"error","alive":false,"state":"disconnected","lastNetMsg":{"id":1402,"text":"网络传输发生错误。"}}` + 日志 `NET disconnected reason=error`；对照 kill guest 时服务端先发 `STOC_DUEL_END`，存活侧保持 healthy（正常结束≠掉线）。
+- **口径**：瞬时 `NET DEAD` 后立刻被真实包恢复是预期行为；`/net.alive` 的 200ms 采样可能抓不到该瞬时窗口（不是漏判）。
 - **对 LLM 的要求**：即使看门狗已修，仍建议**每 15–30s 调 `control_net`**（`alive/state/closeReason/sinceLastStoc/probe` + 新诊断字段）；`idle-no-packet`=被动静默判死、`disconnected`=socket 断、`probe_failed` 不是断线。

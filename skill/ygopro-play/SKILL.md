@@ -29,7 +29,7 @@ description: 用 MCP 控制层真实操作 YGOPro 客户端打牌（MC 线上排
 
 > 只读安全：`control_state` / `control_prompt` / `control_lobby` / `control_actions` / `control_match` / `control_chat` / `control_msg` / `control_health` / `control_net`。会动 UI：`control_join` / `control_deck` / `control_ready` / `control_start` / `control_act_id` / `control_side_move` / `control_side_done` / `control_surrender`。
 >
-> **掉线检查**：长回合/对手长考/等换备时**每 15–30s 调一次 `control_net`**（`alive`/`state`/`closeReason`/`sinceLastStoc`/`probe`）；客户端 `net.heartbeat` 日志每 15s。只有 `alive=false` 或 `state=confirmed_dead/disconnected` 才处理。
+> **掉线检查**：长回合/对手长考/等换备时**每 15–30s 调一次 `control_net`**（`alive`/`state`/`closeReason`/`sinceLastStoc`/`probe` + 新字段 `ourTurn/oppTurn/timeLeft/clockFresh`）；只有 `alive=false` 或 `state=confirmed_dead/disconnected` 才处理（`idle-no-packet`=被动静默判死、`disconnected`=socket 断、`probe_failed` 不算断线）。客户端 `net.heartbeat` 只在**空闲（`since>10s`）时每 15s** 打一条，连续操作时不打=正常，不是故障。
 
 ## 2. 一局的生命周期（照着走）
 
