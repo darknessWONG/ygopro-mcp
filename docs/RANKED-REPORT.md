@@ -270,3 +270,17 @@
   - **D** 直击回归正常；
   - **E** 多怪 2v2 两次 picked 均按期望；全程无 `RETRY after msg=15`、无 eof。
 - **对 LLM 的要求**：`/prompt.isAttackTarget==true` 时**必须**用 `select_card` 按 `atk/def`（或局面收益）显式选；**不要用 `select_auto` / 旧 `id=0`**，否则永远打第一只。
+
+---
+
+## 15. 2026-11-19 看门狗回归修复（`clockRunning` 过期 `g_timeLeft`）
+
+- **现象**：长回合/对手长考时客户端一直打 `NET ALIVE reason=our-turn-idle timeLeft=240`（`timeLeft` 长期不刷新、始终 240），**永远 ALIVE、无 `NET DEAD`** → 真掉线也发现不了。根因：`clockRunning` 用了过期的 `g_timeLeft`（只在某些路径更新），导致"我方回合+倒计时在走"的豁免恒真。
+- **修复（`2026-11-19 17:33:31 / 6,330,368 / EC2B9CD1…`）**：
+  - 客户端新增 `g_timeLeftTick`（最后一次 timeLeft 更新的时间戳）；
+  - `clockRunning = ourTurn && clockFresh(<3s)`——倒计时只有 **3s 内刚刷新**才算"在走"，否则不构成豁免；
+  - `effSilence = max(YGO_NET_DEAD_SILENCE_MS, oppTurn ? 60000 : 0)`（对手回合至少 60s 静默才判）；
+  - 客户端 `net.heartbeat` 每 **15s** 一条；`/net` 新增 `ourTurn/oppTurn/timeLeft/clockFresh` 诊断字段。
+- **配置建议**：**不要再长期设 `YGO_NET_DEAD_SILENCE_MS=600000`**（真掉线 10 分钟才发现）；用默认 **60000** 即可，最多 120000。
+- **验证**：bot-scout 正在跑（silence 判死 / ourturn 不误判 / normal 回归三组），PASS 后本节补证据（`ranked/logs/`）。
+- **对 LLM 的要求**：即使看门狗已修，仍建议**每 15–30s 调 `control_net`**（`alive/state/closeReason/sinceLastStoc/probe` + 新诊断字段）；`idle-no-packet`=被动静默判死、`disconnected`=socket 断、`probe_failed` 不是断线。

@@ -565,7 +565,8 @@ LLM 想回答"**我赢了吗/为什么赢/大比分多少/比赛结束没**"时�
 | `lastStocAt`/`lastStocName`/`sinceLastStoc` | 最近服务器消息时间/名字/距今 ms（`-1`=没有；`STOC_DUEL_END` 表示整场结束） |
 | `probe` | `{enabled,unsupported,lastSentAt,lastReplyAt,rttMs,fails,lastReplyPlayerType,lastReplyText}`：`fails` 涨只降级状态（`probe_failed`），**不单独判死** |
 | `lastNetMsg` | `{id,text,ageMs}` 最近一条系统消息（`STOC_CHAT`） |
-| 诊断（新 build） | `ourTurn`/`oppTurn`/`timeLeft`/`clockFresh`：判断"服务端时钟是否在走"用；`clockFresh=false` 说明本地倒计时可能过期 |
+| 诊断（新 build） | `ourTurn`/`oppTurn`/`timeLeft`/`clockFresh`：看门狗诊断；`timeLeft` 是客户端认为的我方剩余秒数，`clockFresh` = 该值是否在 3s 内刚刷新（`false`=旧值，**不构成豁免**） |
+| `net.heartbeat` | 客户端日志每 **15s** 一条 `NET heartbeat alive=.. state=.. sinceStoc=..`；与 `control_net` 轮询配合使用 |
 
 **怎么判**：
 
@@ -579,6 +580,7 @@ LLM 想回答"**我赢了吗/为什么赢/大比分多少/比赛结束没**"时�
 | `sinceLastStoc` 持续增长但 `alive=true` | 对手在长考/长展开 | 继续等（不是掉线），每 15–30s 再看 |
 
 > 注意：`NET DEAD reason=probe-fails` 只存在于旧版；当前版（`11:31:00+`）死因只有**真实断开**（`eof`/`error`）或**被动静默**（`idle-no-packet`）。`NET DEAD reason=idle-no-packet` 的 `since`/`eff` 在客户端日志里。
+> **不要**再长期设 `YGO_NET_DEAD_SILENCE_MS=600000`（真掉线要 10 分钟才发现；probe 误判已修）。默认 **60000** 即可，最多 120000；`17:33:31` 版起看门狗用 `clockFresh`（3s 内刷新才算"倒计时在走"），`our-turn-idle` 不再因过期 `g_timeLeft` 永远豁免。
 
 **旧客户端降级**：没有 `ourTurn/oppTurn/timeLeft/clockFresh` 时按 `alive`+`state`+`sinceLastStoc`+`closeReason` 判断。
 

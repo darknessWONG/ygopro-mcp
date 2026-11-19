@@ -13,7 +13,7 @@ description: 用 MCP 控制层真实操作 YGOPro 客户端打牌（MC 线上排
 ## 0. 最高优先级硬规则（踩过的坑）
 
 1. **TP（先后攻）13 秒铁律**：`STOC_SELECT_TP` 出现后 **13s 内必须答**，否则服务端直接 `eof` 踢人。新 exe 默认 **2 秒自动答**（先/后攻按 `YGO_TP_AUTO_RES`，默认 2=后手）；外部要覆盖只能在 2 秒内 `/act_id kind=tp`。
-2. **判死阈值**：旧版（≤2026-11-15 19:05:42）默认 10s，会把"自己回合思考中"误判 `confirmed_dead` → 管线冻结 → 被踢，**旧版启动必须设 `YGO_NET_DEAD_SILENCE_MS=600000`**；当前版默认 60s 且**我方回合/倒计时/awaiting 时永不判死**（`NET ALIVE reason=our-turn-idle`）。**另一旧版 bug：`/tip` probe 2 次超时即 `NET DEAD reason=probe-fails`+断线**（对手长展开 ~7.5s 被误踢）；`11:31:00` 起 probe 失败只降级 `probe_failed`（`YGO_NET_PROBE_FAIL_MAX=5` 仅日志/降级），判死走被动静默。旧版可用 `YGO_NET_PROBE=0` 规避。
+2. **判死阈值**：旧版（≤2026-11-15 19:05:42）默认 10s，会把"自己回合思考中"误判 `confirmed_dead` → 管线冻结 → 被踢，**仅旧版启动需设 `YGO_NET_DEAD_SILENCE_MS=600000`**；当前版用**默认 60000 即可（最多 120000），别再长期设 600000**（真掉线 10 分钟才发现）。`17:33:31` 版起看门狗修好：`clockRunning = ourTurn && clockFresh(<3s)`，`our-turn-idle` 不再因过期 `g_timeLeft` 永远豁免；`/net` 新增 `ourTurn/oppTurn/timeLeft/clockFresh`，`net.heartbeat` 每 15s。**另一旧版 bug：`/tip` probe 2 次超时即 `NET DEAD reason=probe-fails`+断线**（对手长展开 ~7.5s 被误踢）；`11:31:00` 起 probe 失败只降级 `probe_failed`（`YGO_NET_PROBE_FAIL_MAX=5` 仅日志/降级），判死走被动静默。旧版可用 `YGO_NET_PROBE=0` 规避。
 3. **MSG_SORT_CARD（洗牌/排序）响应是裸位序字节、无长度前缀**：两张卡保持原序 = `hex="0001"`；用 `control_act({seq, hex})`，**不要**加计数前缀（会死循环）。
 4. **多怪兽攻击目标**：旧版会核心拒绝（`curMsg` 15↔10 反复、攻击消耗但不结算）；新 exe 已修（见 PLAYBOOK-FULL §3.7.2），若仍遇到就降级：直接攻击 / `to_m2` / `end_battle`。
 5. **announce 140–143**：旧版 `curMsg=143` 前会 `awaiting=false` 卡住；新 exe（20:11:00+）`/actions` 提供 `announce_race/announce_attrib/announce_card/announce_number`，编码 **race/attrib=掩码、card=卡号、number=数值本身**（候选见 `/prompt.announceNumberValues`）。
@@ -96,7 +96,8 @@ while not state.match.over:
 | 排序 prompt 死循环 | `curMsg==25` 反复 | `control_act({seq, hex:"0001"})` 裸字节重发；20:11:00 已改直连字节 |
 | 卡在 `curMsg==143`、`awaiting=false` | 旧版 announce prompt 未发布 | 升级 20:11:00+；用 `/actions` 的 `announce_number`（数值本身）/`announce_race/attrib/card` |
 | `stale action id` | `/act_id` 的 seq 旧了 | 重新 `control_actions` 再发 |
-| `confirmed_dead` 误判 | 我方回合思考>10s | 设 `YGO_NET_DEAD_SILENCE_MS=600000`（新 exe 默认已修） |
+| `confirmed_dead` 误判 | 我方回合思考>10s | 旧版设 `YGO_NET_DEAD_SILENCE_MS=600000`；当前版用默认 60000（最多 120000），别 600000 |
+| 一直 `NET ALIVE reason=our-turn-idle timeLeft=240`、无 NET DEAD | 旧版 `clockRunning` 用过期 `g_timeLeft`（看门狗 bug） | 升级 `17:33:31+`（`clockFresh` 3s 内刷新才算）；用 `control_net` 主动查 `alive/sinceLastStoc/closeReason` |
 | `NET DEAD reason=probe-fails` → `disconnected error` | 旧版 probe 独立 2 次阈值误判（对手长展开 ~7.5s 静默） | 升级 `11:31:00+`（probe 失败只降级）；旧版 `YGO_NET_PROBE=0` 规避或 `YGO_NET_PROBE_FAIL_MAX` 调大 |
 | `/net.state=="probe_failed"` 但 `alive=true` | 新版正常（probe 让位守卫，logs `NET probe deferred ...`） | 不用处理，继续对局 |
 | MC API 连续超时 8 次 | 排队失败 | 停 5 分钟再试 |
@@ -106,7 +107,7 @@ while not state.match.over:
 
 ```powershell
 cd $ROOT
-$env:YGO_NET_DEAD_SILENCE_MS = '600000'
+$env:YGO_NET_DEAD_SILENCE_MS = '60000'       # 当前版默认 60000（最多 120000，不要 600000；旧 exe 才 600000）
 $env:YGO_NET_PROBE_FAIL_MAX = '5'            # probe 失败仅降级/日志（11:31:00 版默认 5；旧版可用 YGO_NET_PROBE=0 关探活）
 $env:YGO_PROMPT_AUTO_DEFAULT_MS = '60000'   # EOF guard（10:25:14 版默认即 60000；0=关，不建议）
 $env:YGO_PROMPT_IDLE_WARN_MS = '45000'      # 空闲告警（默认 45000）
