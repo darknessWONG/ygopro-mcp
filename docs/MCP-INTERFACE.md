@@ -54,7 +54,7 @@
         └───────────┬────────────┘
                     │ MCP (stdio, JSON-RPC)
         ┌───────────▼────────────┐
-        │ bridge/mcp-server.mjs  │   薄桥：18 个工具 → HTTP
+        │ bridge/mcp-server.mjs  │   薄桥：19 个工具 → HTTP
         └───────────┬────────────┘
                     │ HTTP 127.0.0.1:7788（房主）/ 7789（客人）
         ┌───────────▼───────────────────────────────────────┐
@@ -103,7 +103,7 @@
 
 ---
 
-## 2. MCP 工具清单（`bridge/mcp-server.mjs` 的 18 个工具）
+## 2. MCP 工具清单（`bridge/mcp-server.mjs` 的 19 个工具）
 
 > 全部无参数或只有简单参数；返回体就是对应 HTTP 端点的 JSON（原文透传，见 §4）。**例外**：`control_match` 返回派生的 `{match, summary}`（见 §5.6）。
 
@@ -127,6 +127,7 @@
 | 16 | `control_side_done` | **Bo3 换备**：换完牌点"确定"继续下一局（等价 `btnSideOK`） | — | 先 `GET /actions` 找 `kind=side_ok` 的 id，再 `GET /act_id?id=` |
 | 17 | `control_match` | **整场结果一句话**（谁赢/为什么/大比分/是否结束，详见 §5.6） | — | `GET /state`，读 `state.match` 派生 |
 | 18 | `control_prompt` | **当前 prompt 快照（不阻塞）**：seq/awaiting/curMsg/tpPending/sidePending/候选计数 | — | `GET /prompt` |
+| 19 | `control_net` | **掉线/存活检查（轮询用，详见 §5.7）**：connected/joined/inDuel/alive/state/closeReason/lastStocName/sinceLastStoc/probe/lastNetMsg + 诊断字段 | — | `GET /net` |
 
 **MCP 连接示例（JSON-RPC over stdio）**
 
@@ -547,6 +548,39 @@ LLM 想回答"**我赢了吗/为什么赢/大比分多少/比赛结束没**"时�
 
 **旧客户端降级**：没有 `state.match` 时返回 `{"match":null,"fallback":true,"summary":"..."}`，summary 用当前局字段（`inDuel`/`winPlayerLocal`/`winReasonName`）尽力表达（如 `第 1 局进行中（旧客户端无整场汇总，turn 7）`、`本局：你赢了，原因 LP_ZERO（对手 LP 归零）`），**不会报错**。
 `control_state` 的返回里保留原样 `match`（透传），但要"给用户/自己报结果"时用 `control_match`。
+
+### 5.7 掉线检查（`/net` + `control_net`）
+
+**什么时候调**：长回合、对手长考、换备等对手、任何"感觉卡住了"的时候——**建议每 15–30s 调一次 `control_net`**（客户端自身 `net.heartbeat` 日志也是 15s 一条）。掉线检测不要只依赖客户端判死：`clockRunning` 用的 `g_timeLeft` 过期时，被动静默豁免可能永远成立（poc 修复中），所以 LLM 要自己看。
+
+**返回字段**（`GET /net`）：
+
+| 字段 | 含义 / 典型值 |
+|---|---|
+| `connected` / `joined` | `true/false`：TCP 已连 / 已进房 |
+| `inDuel` / `turn` | 对局中 / 当前回合 |
+| `alive` | `true`（正常）/ `false`（判定死亡）；**只信这个 + `state`** |
+| `state` | `healthy`（正常）/ `idle`（未连）/ `probe_failed`（探活失败但未判死，`11:31:00+` 正常现象）/ `confirmed_dead`（被动静默判死）/ `disconnected`（socket 断）/ `unsupported` |
+| `closeReason` | `none` / `eof`（服务端 FIN）/ `error`（socket 错误）/ `stop`/`exit`（我们主动）/ `unknown` |
+| `lastStocAt`/`lastStocName`/`sinceLastStoc` | 最近服务器消息时间/名字/距今 ms（`-1`=没有；`STOC_DUEL_END` 表示整场结束） |
+| `probe` | `{enabled,unsupported,lastSentAt,lastReplyAt,rttMs,fails,lastReplyPlayerType,lastReplyText}`：`fails` 涨只降级状态（`probe_failed`），**不单独判死** |
+| `lastNetMsg` | `{id,text,ageMs}` 最近一条系统消息（`STOC_CHAT`） |
+| 诊断（新 build） | `ourTurn`/`oppTurn`/`timeLeft`/`clockFresh`：判断"服务端时钟是否在走"用；`clockFresh=false` 说明本地倒计时可能过期 |
+
+**怎么判**：
+
+| 观察 | 结论 | 动作 |
+|---|---|---|
+| `alive=true` 且 `state=healthy/idle` | 连接正常 | 继续等/正常对局 |
+| `state=probe_failed`、`alive=true` | 探活失败但未判死（`11:31:00+` 正常） | 不用处理；继续观察 |
+| `alive=false` 或 `state=confirmed_dead` | 被动静默判死（`sinceLastStoc` 超阈值） | 存证 → 中止本场 → `/leave` 重排 |
+| `state=disconnected`（`closeReason=eof/error`） | 真实断线 | 中止本场；可选 `/join` 同房重连（有 journal） |
+| `lastStocName=STOC_DUEL_END` | 对局正常结束 | 用 `control_match` 报结果，`/leave` 重排 |
+| `sinceLastStoc` 持续增长但 `alive=true` | 对手在长考/长展开 | 继续等（不是掉线），每 15–30s 再看 |
+
+> 注意：`NET DEAD reason=probe-fails` 只存在于旧版；当前版（`11:31:00+`）死因只有**真实断开**（`eof`/`error`）或**被动静默**（`idle-no-packet`）。`NET DEAD reason=idle-no-packet` 的 `since`/`eff` 在客户端日志里。
+
+**旧客户端降级**：没有 `ourTurn/oppTurn/timeLeft/clockFresh` 时按 `alive`+`state`+`sinceLastStoc`+`closeReason` 判断。
 
 ---
 

@@ -10,7 +10,7 @@
 
 ## 0. 先读这一段（TL;DR）
 
-### 0.1 五条硬规则（违反 = 直接丢房/被踢，LLM 实测踩过）
+### 0.1 六条硬规则（违反 = 直接丢房/被踢，LLM 实测踩过）
 
 1. **TP 13 秒铁律**：`STOC_SELECT_TP`（先/后攻）出现后**必须在 13 秒内作答**，否则服务端直接 `eof` 踢人（真实 LLM 连丢两个房就是这个原因）。**当前版（19:05:42 起）默认在 ~2 秒内自动答"后攻"（`res=2`）**（env `YGO_TP_AUTO` / `YGO_TP_AUTO_RES`，实机 `TP auto-answered res=2`；可用 `YGO_TP_AUTO_RES=1` 改为先攻）；人工/外部覆盖**必须在 2 秒内**。优先级：**TP > 一切**。
 2. **判死误杀（当前版已修，11:31:00 起 probe 也不再单独判死）**：旧 exe 的 `YGO_NET_DEAD_SILENCE_MS` 默认 10s，会把"自己回合思考中"误判成 `confirmed_dead` → 提示管线冻结 → 被踢；**当前版默认阈值 60s，且我方回合/倒计时/awaiting/busy 时不判死**（`NET ALIVE reason=our-turn-idle`）。**另一旧版 bug：`/tip` 探活连 2 次超时就 `NET DEAD reason=probe-fails` + `disconnected error`**——对手长展开 7.5s 静默会被误踢；`11:31:00` 版起 probe 失败**只置 `probe_failed`**（`NET probe failed ... (defer to passive silence guard)`），判死统一走被动静默；`YGO_NET_PROBE_FAIL_MAX`（默认 5，仅降级/日志）。**旧 exe 仍必须显式设 `YGO_NET_DEAD_SILENCE_MS=600000`（或用 `YGO_NET_PROBE=0` 规避 probe 误判）**。
@@ -18,6 +18,7 @@
 4. **多怪兽攻击目标（当前版已修复）**：旧版本 `MSG_SELECT_BATTLECMD`/攻击目标选择会被内核拒绝（`curMsg` 15↔10 反复、攻击消耗不结算）。**19:05:42 起、20:11:00 最终版含修复**（`selectMin==0→[0]`、select 直连字节、stale seq/snapshot 防护；LAN 实机 PASS：`send15=2 retry15=0`、`hex=0100`、LP 8000→3900→1850、`loops=0`）。旧 exe 遇到时仍**降级为直接攻击/结束战斗阶段**。
 5. **announce 140–143（20:11:00 修复）**：旧版 `curMsg=143` 前会 `awaiting=false` 卡住；当前版 `/actions` 提供 `announce_race/announce_attrib/announce_card/announce_number`，编码 **race/attrib=掩码、card=卡号、number=数值本身**（候选见 `/prompt.announceNumberValues`）。详见 §3.7.3。
 6. **prompt 空等 ~90s 会被服务端按 AFK `eof` 踢（MC 排位行为）**：`10:25:14` 版起 **`YGO_PROMPT_AUTO_DEFAULT_MS`（默认 60000，0=关）**：45s 先打 `PROMPT idle warning`，60s 无任何 `CTOS_RESPONSE` 则自动发**保守默认动作**（`PROMPT auto-default msg=.. seq=.. kind=.. after=..ms (idle guard, LLM silent)`），避免意外 EOF。可用 **`/prompt.awaitingSinceMs`** 看已等待毫秒。**不要依赖兜底**：正常决策要快；兜底只是保命。
+7. **掉线要自己查（`control_net`）**：长回合/对手长考/换备等对手时，**每 15–30s 调一次 `control_net`**（客户端 `net.heartbeat` 日志也是 15s 一条）。只有 `alive=false` 或 `state=confirmed_dead/disconnected` 才处理；`state=probe_failed`/`fails` 增长不是断线。**被动判死 `clockRunning` 目前可能因过期 `g_timeLeft` 永远豁免**（poc 修复中），不要只等客户端判死。
 
 ### 0.2 十条铁律
 
@@ -575,6 +576,7 @@ control_act({ seq: <当前 seq>, hex: "000201" })
 | `control_actions` → `control_act_id` | **立即**（<1s） | 拿到候选就选、提交；不要 sleep 思考太久 |
 | `control_act`（`MSG_SORT_CARD`） | **立即**，hex 裸字节无前缀 | 两张保持原序 = `hex:"0001"`；加前缀会死循环（§3.7.1） |
 | `control_state` 轮询 | 2–3s | 监控用；不要 100ms 级轮询 |
+| **`control_net`（掉线检查）** | **每 15–30s**（`net.heartbeat` 日志每 15s） | 长回合/对手长考/等换备时必查；`alive=false` 或 `state=confirmed_dead/disconnected` 才处理 |
 | `/ready` | 每 1–2s，≤30 次 | 直到 `lobby.ready[self]==1` |
 | `/start` | 每 2–3s，≤20 次 | 直到 `state.started==true` |
 | `/side_swap` 后重试 | 100–300ms | 等 UI 线程落地；读 `/state.side.counts` 确认 |
@@ -739,6 +741,7 @@ YGO_CONTROL_PORT=7789 YGO_TP=2 YGO_SIDE_AUTO=1 .\YGOPro.exe -h 127.0.0.1 -p 7911
 | **`NET probe deferred (reason=our-turn/awaiting/busy/silence ...)`** | 新版正常行为（probe 让位于守卫，不判死） | `/net.probe.fails`、`/net.alive`（仍 true） | 不用处理，继续对局 |
 | 中途 `eof`、`sinceLastStoc` 很小 | 服务端 AFK 踢（~90s） | `/chat` 是否有 afk/倒计时警告；决策耗时 | 决策压到 <60s；无解则 surrender 干净结束 |
 | 中途 `eof`、`sinceLastStoc` 很大 | 链路静默/掉线 | `/net.probe.fails`,`/chat` | 判失联，重排/重连 |
+| **"怎么知道掉线了？"（主动/定时检查）** | 长回合/对手长考时客户端判死可能被 `clockRunning` 过期豁免（`g_timeLeft` bug，poc 修复中） | **每 15–30s `control_net`**：`alive`、`state`（`healthy/idle/probe_failed/confirmed_dead/disconnected`）、`closeReason`、`sinceLastStoc`、`probe.fails`；客户端 `net.heartbeat` 日志每 15s 一条 | 只有 `alive=false` 或 `state=confirmed_dead/disconnected` 才中止/重排；`probe_failed`/`sinceLastStoc` 增长但 `alive=true` 属长考，继续等 |
 | 排队永远拿不到房 | athletic 无人（深夜）/API 故障 | `authUser` 200、`/ygopro/match/stats/athletic` | 等到白天/换 arena 验证；见 `match-queue-research.md` |
 | `cancel=1` 后仍排队 | 服务端不认 cancel | — | 取消 = abort 请求；不要依赖参数 |
 | Node fetch 报 `HeadersTimeout` | 长轮询超默认头超时 | 脚本超时配置 | 用脚本自带超时重试；不是服务端错误 |
@@ -771,6 +774,7 @@ YGO_CONTROL_PORT=7789 YGO_TP=2 YGO_SIDE_AUTO=1 .\YGOPro.exe -h 127.0.0.1 -p 7911
 15. **判死阈值**：当前版默认 60s + 我方回合/倒计时/awaiting/busy 不判死（`NET ALIVE reason=our-turn-idle`）；旧 exe 仍是 10s，必须设 `YGO_NET_DEAD_SILENCE_MS=600000`。
 16. **prompt 空等 ~90s 会被 MC 排位按 AFK `eof` 踢；LAN srvpro 不踢 eof，而是 180s `TIMEOUT` 判负**（证据 `ranked/logs/eof-guard-validation.md`、`control-23776.log`）。`10:25:14` 版 guard 默认 60s 兜底（`YGO_PROMPT_AUTO_DEFAULT_MS`），`/prompt.awaitingSinceMs` 可看等待时长；别依赖兜底。
 17. **probe（`/tip`）误判——已修复（11:31:00 版）**：旧版 probe 2 次超时即 `NET DEAD reason=probe-fails` + 断线（对手长展开 7.5s 静默被误踢）；新版只降级 `probe_failed`（`YGO_NET_PROBE_FAIL_MAX=5` 仅日志/降级），判死走被动静默。**服务端自身断线无法预防**（该限制保留）。
+18. **掉线检测现状**：被动判死 `clockRunning` 目前用过期 `g_timeLeft`，豁免可能永远成立（poc 修复中）；因此 **LLM 必须每 15–30s 调 `control_net` 自查**（`alive/state/closeReason/sinceLastStoc/probe`）。`idle-no-packet`=被动静默判死，`disconnected`=socket 断；`probe-failed` 单独出现不是断线。
 
 ---
 

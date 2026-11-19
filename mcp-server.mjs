@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // bridge/mcp-server.mjs - MCP (stdio) server exposing the instrumented client's control API.
 //
-// Tools (18):
+// Tools (19):
 //   control_state        -> GET  /state  (whole match result is passed through as `match`; see control_match)
 //   control_match        -> GET  /state  -> {match, summary}   (one-line human-readable Bo3 result)
 //   control_prompt       -> GET  /prompt (current prompt snapshot, non-blocking)
@@ -18,6 +18,7 @@
 //   control_join         -> POST /join?ip&port&pass
 //   control_msg          -> GET  /msg
 //   control_health       -> GET  /health
+//   control_net          -> GET  /net (liveness/disconnect check; poll every 15-30s)
 //   control_side_move    -> POST /side_swap?code&from&to&n     (Bo3 side decking)
 //   control_side_done    -> GET  /actions then /act_id (kind=side_ok)  (confirm side deck, Bo3)
 //
@@ -310,6 +311,18 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
+    name: 'control_net',
+    description:
+      'Liveness / disconnect check (GET /net) - the tool to call periodically (every 15-30s) during a long turn or an opponent\'s slow play. ' +
+      'Returns connected, joined, inDuel, alive, state (healthy|idle|probe_failed|confirmed_dead|disconnected), closeReason (none|eof|error|stop|exit|unknown), ' +
+      'lastStocName, sinceLastStoc, probe {enabled,unsupported,fails,rttMs}, lastNetMsg {id,text,ageMs}, plus diagnostics (ourTurn/oppTurn/timeLeft/clockFresh on newer builds). ' +
+      'What to do: only act when alive=false or state is confirmed_dead/disconnected (or net.lastStocName shows a server-side end like STOC_DUEL_END). ' +
+      'A growing probe.fails with state=probe_failed is NOT a disconnect on builds after 2026-11-16 11:31 (probe failures only degrade the status; real death comes from passive silence / real EOF). ' +
+      'Note: NET DEAD reason=probe-fails only exists on older builds; current builds report idle-no-packet (passive silence) or a real disconnect. ' +
+      'Until the client\'s clockRunning bug is fixed, the passive-silence exemption can be always-on (stale g_timeLeft), so do NOT rely on the client alone: poll this tool and judge yourself.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
     name: 'control_side_move',
     description:
       'Bo3 side decking: move N copies of one card between pools while the side phase is pending ' +
@@ -357,6 +370,7 @@ async function callTool(name, args) {
     }
     case 'control_msg': return http('/msg');
     case 'control_health': return http('/health');
+    case 'control_net': return http('/net');
     case 'control_lobby': return http('/lobby');
     case 'control_actions': return http('/actions');
     case 'control_act_id': return http('/act_id?id=' + encodeURIComponent(args?.id ?? 0));
