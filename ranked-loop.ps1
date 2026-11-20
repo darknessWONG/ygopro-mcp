@@ -11,6 +11,9 @@ param(
   [int]$StallSec = 75,
   [int]$MaxTotalMinutes = 90,
   [int]$SilentAbortSec = 150,
+  # Fast leave when the server/opponent stalls: /net.stallMs grows while the opponent clock is NOT
+  # fresh (oppClockFresh=false). Default 120000 = the documented "stuck" threshold.
+  [int]$StallLeaveMs = 120000,
   [int]$EmptyRoomSec = 35
 )
 $ErrorActionPreference = 'Continue'
@@ -213,11 +216,21 @@ while ($successCount -lt $Runs -and (Get-Date) -lt $totalDeadline) {
         }
       }
     }
-    # server goes silent on an opponent that left: timeLeft stops ticking and no STOC arrives.
-    # leave the room and take a new match instead of burning the whole budget.
-    if (([int]$s.winPlayer -lt 0) -and -not $awaiting -and -not $s.sidePending -and -not $s.tpPending -and ((Get-Date) - $lastProgress).TotalSeconds -gt $SilentAbortSec) {
-      W ("silent duel for {0}s (turn={1} curMsg={2} timeLeft={3}) -> leave and re-queue" -f [int]((Get-Date) - $lastProgress).TotalSeconds, $s.turn, $s.curMsg, $s.timeLeft)
-      Shot "m$matchNo-silent"
+    # server goes silent on an opponent that left / a stalled server: /net.stallMs keeps growing
+    # while the opponent clock is NOT fresh -> leave the room quickly and take a new match.
+    # Primary rule: stallMs >= StallLeaveMs (120s) && oppClockFresh=false. Legacy SilentAbortSec
+    # stays as a fallback for builds without the stall fields.
+    $netEarly = $null; try { $netEarly = (JGet 'http://127.0.0.1:7788/net') | ConvertFrom-Json } catch {}
+    $stallMs = -1; $oppClockFresh = $null
+    if ($netEarly) {
+      if ($null -ne $netEarly.stallMs) { try { $stallMs = [int64]$netEarly.stallMs } catch { $stallMs = -1 } }
+      if ($null -ne $netEarly.oppClockFresh) { $oppClockFresh = [bool]$netEarly.oppClockFresh }
+    }
+    $stallLeave = ($stallMs -ge $StallLeaveMs) -and ($oppClockFresh -eq $false)
+    $silentFallback = ((Get-Date) - $lastProgress).TotalSeconds -gt $SilentAbortSec
+    if ($s.inDuel -and ([int]$s.winPlayer -lt 0) -and -not $awaiting -and -not $s.sidePending -and -not $s.tpPending -and ($stallLeave -or $silentFallback)) {
+      W ("stall/leave: stallMs={0} oppClockFresh={1} silentSec={2} turn={3} curMsg={4} timeLeft={5} -> leave and re-queue" -f $stallMs, $oppClockFresh, [int]((Get-Date) - $lastProgress).TotalSeconds, $s.turn, $s.curMsg, $s.timeLeft)
+      Shot "m$matchNo-stall"
       Set-Content -Path (Join-Path $evm 'silent-state.json') -Value (JGet 'http://127.0.0.1:7788/state') -Encoding UTF8
       Set-Content -Path (Join-Path $evm 'silent-net.json') -Value (JGet 'http://127.0.0.1:7788/net') -Encoding UTF8
       try { $null = JPost 'http://127.0.0.1:7788/leave' } catch {}
