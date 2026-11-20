@@ -4,8 +4,8 @@
 > **先读（操作流程）**：[`PLAYBOOK-FULL.md`](PLAYBOOK-FULL.md) —— 全流程权威操作手册（每步判定/工具速查/状态字典/排错）；本文档是字段与接口契约。
 >
 > **适用版本（当前正式版 exe）**：`mycard-client/bin/release/x64/YGOPro.exe`
-> = **2026-11-19 17:33:31 / 6,330,368 B**，SHA256 `EC2B9CD1174247B742A77B1A49604F762D5B8D5B3092DC2D3230761A9E16BAF1`
-> （2026-11-19 **看门狗回归修复版**：修 `g_timeLeft` 不清零导致 `clockRunning` 永久 true（`NET ALIVE reason=our-turn-idle timeLeft=240` 永真）——新增 `g_timeLeftTick`、`clockFresh = timeLeft>0 && now-tick<3000`、`clockRunning = ourTurn && clockFresh`；判死 `!clockRunning && quiet && since > effSilence`（`effSilence=max(YGO_NET_DEAD_SILENCE_MS, oppTurn&&quiet?60000:0)`）；空闲每 15s `NET heartbeat`；`/net` 新增 `ourTurn/oppTurn/timeLeft/clockFresh`。另含前版逐卡 select_card/probe-fails/EOF guard；验收/历史见文末记录）
+> = **2026-11-20 15:34:59 / 6,329,856 B**，SHA256 `19B8E843CCB22F5CF8399CBA48ED3CFF93373AD992B1295FFB4357E110703521`
+> （2026-11-20 **stall 诊断版**（判死逻辑不变）：`/net` 新增 `stallMs`（对局中无入站 STOC 毫秒）、`oppTimeLeft`、`oppClockFresh`（对手倒计时 3s 内刚刷新）；日志 `NET STALL since=.. awaiting=.. ourTurn=.. oppClockFresh=.. oppTimeLeft=.. state=..`（`YGO_STALL_WARN_MS` 默认 120000、每 30s）；`stallMs>120s && oppClockFresh=false` = 对方卡住 → 离桌重排。另含前版看门狗 clockFresh/逐卡 select_card/probe-fails/EOF guard；验收/历史见文末记录）
 > `/state.resume.reason` 在加载成功时返回 `"loaded"`，行为不变；22:23:28 已做过冒烟）。
 > 该版含重连基础能力：`GET /net`、自动 `/tip` 探活、`YGO_SUPPRESS_MODALS` 模态框抑制、
 > `resume-context-<port>.json` journal、`POST /leave`（详见 [RECONNECT-DESIGN.md](RECONNECT-DESIGN.md)、[reconnect-lab.md](reconnect-lab.md)）。
@@ -566,6 +566,7 @@ LLM 想回答"**我赢了吗/为什么赢/大比分多少/比赛结束没**"时�
 | `probe` | `{enabled,unsupported,lastSentAt,lastReplyAt,rttMs,fails,lastReplyPlayerType,lastReplyText}`：`fails` 涨只降级状态（`probe_failed`），**不单独判死** |
 | `lastNetMsg` | `{id,text,ageMs}` 最近一条系统消息（`STOC_CHAT`） |
 | 诊断（新 build） | `ourTurn`/`oppTurn`/`timeLeft`/`clockFresh`：看门狗诊断；`timeLeft` 是客户端认为的我方剩余秒数，`clockFresh` = 该值是否在 3s 内刚刷新（`false`=旧值，**不构成豁免**） |
+| **stall 诊断（`15:34:59` 起）** | **`stallMs`** = 对局中无入站 STOC 的毫秒数；**`oppTimeLeft`** = 对手剩余时间；**`oppClockFresh`** = 对手倒计时是否 3s 内刚刷新。**`stallMs>120000 && oppClockFresh=false` = 对方客户端/服务端卡住**（不是我们掉线，也不是对手长考）→ 离桌重排。日志 `NET STALL since=.. awaiting=.. ourTurn=.. oppClockFresh=.. oppTimeLeft=.. state=..`（`YGO_STALL_WARN_MS` 默认 120000，每 30s，仅诊断不影响判死） |
 | `net.heartbeat` | 客户端日志 `NET heartbeat alive=.. state=.. since=.. ourTurn=.. oppTurn=.. awaiting=.. timeLeft=.. clockFresh=..`；**只在空闲（`since>10s`）时每 15s 打一次**，连续操作/有包时不打——这是看门狗诊断日志，不是故障（要"无条件定时心跳"需后续版本加） |
 
 **怎么判**：
@@ -845,6 +846,7 @@ UI close empty frame name=wMessage|wACMessage|wQuery
 | `YGO_TP_AUTO` / `YGO_TP_AUTO_RES` | `1` / `2` | 先/后攻 2s 无外部应答自动作答（防 13s eof）；`YGO_TP_AUTO_RES`：`1`=先攻、`2`=后攻 |
 | `YGO_NET_DEAD_SILENCE_MS` | `60000` | 被动静默判死阈值；我方回合/倒计时在走时**永不判死**（`NET ALIVE reason=our-turn-idle`） |
 | `YGO_NET_PROBE_FAIL_MAX` | `5` | `/tip` 连续超时达该次数**只降级状态**（`probe_failed`）并打 `NET probe failed ... (defer to passive silence guard)`，**绝不单独判死/断线**；判死统一走 `YGO_NET_DEAD_SILENCE_MS` + 守卫 |
+| `YGO_STALL_WARN_MS` | `120000` | **stall 诊断**阈值（`15:34:59` 起）：对局中无入站 STOC 超过该值后每 30s 打 `NET STALL since=.. awaiting=.. ourTurn=.. oppClockFresh=.. oppTimeLeft=.. state=..`；仅日志/诊断，**不影响判死** |
 | `YGO_PROMPT_AUTO_DEFAULT_MS` | `60000` | **EOF guard**：已发布 prompt 超过该时间无任何 `CTOS_RESPONSE` → 自动发保守默认（日志 `PROMPT auto-default ... (idle guard, LLM silent)`）；`0`=关。服务端 AFK 约 90s 会 `eof` |
 | `YGO_PROMPT_IDLE_WARN_MS` | `45000` | 空闲告警阈值（日志 `PROMPT idle warning seq=.. msg=.. idle=..ms`），便于上层 agent 感知 |
 
@@ -887,7 +889,7 @@ $env:YGO_UI_ACTIONS='0'; powershell ... bridge\lan-run.ps1 -Games 1
 5. **链字段有 1 帧延迟**：`/state` 与 `/prompt` 的链字段来自 UI 线程快照；`chainStack[].forced` 恒 false、`type` 固定 `effect`。
 6. **UI 模式个别动作有 600ms 校验延迟**（点不中时才会走满）。
 7. **多效果卡默认点第 0 个 option**（可能不是最优效果）；`announce/counter/sort/sum` 是"安全默认"而非最优。
-8. **线上排位：能完整打完，但胜率依赖策略**：客户端/管线侧已实测可拿房→进房→选卡组→准备→完整对局→自然结算（LP_ZERO 等），并支持受控掉线后约 13s 重连回同房继续打；输局主要是 policy 保守（大量 `decline`/`to_bp`/`end`），不是管线卡死。**排位相关新字段（`/state.deckError`、`/state.isWin/isLoss/isDraw`、`/state.lpOrder`、`/state.pipeline.recentMsgs`、`/state.tpPending`+`/state.tpOptions`、`/actions` 的先/后攻动作 `kind:"tp"`+`index:1|2`、`/state.sidePending`、`/actions` 的换备牌动作 `kind:"side_ok"`（Bo3 每局之间，`id=0` → `btnSideOK`/`SendUpdateDeck`）、**`/state.side`（`available/pending/waiting/elapsedMs/waitingSeen/lastWaitMs/main/extra/side/counts/pre/limits/error`）+ `POST /side_swap`（真正换牌）+ `side_ok` 竞态修复**、**`/state.match`（`game`/`over`/`games[]`（含 `win`/`winnerSeat`/`reasonName`）/`gamesWonLocal`/`gamesWonOpp`/`lastWinnerLocal`/`lastReasonName`，配合 `control_match` 一句话报结果）**、`CHAIN raw` 等；Bo3 Game2/3 开局客户端会 `DUEL_START reset result state` 重置 `winPlayer/winReason`）只在客户端 `2026-11-19 17:33:31 / 6,330,368 B`（sha256 `EC2B9CD1174247B742A77B1A49604F762D5B8D5B3092DC2D3230761A9E16BAF1`）及之后存在**；旧 exe 请先升级。详见 [`RANKED-REPORT.md`](RANKED-REPORT.md)。
+8. **线上排位：能完整打完，但胜率依赖策略**：客户端/管线侧已实测可拿房→进房→选卡组→准备→完整对局→自然结算（LP_ZERO 等），并支持受控掉线后约 13s 重连回同房继续打；输局主要是 policy 保守（大量 `decline`/`to_bp`/`end`），不是管线卡死。**排位相关新字段（`/state.deckError`、`/state.isWin/isLoss/isDraw`、`/state.lpOrder`、`/state.pipeline.recentMsgs`、`/state.tpPending`+`/state.tpOptions`、`/actions` 的先/后攻动作 `kind:"tp"`+`index:1|2`、`/state.sidePending`、`/actions` 的换备牌动作 `kind:"side_ok"`（Bo3 每局之间，`id=0` → `btnSideOK`/`SendUpdateDeck`）、**`/state.side`（`available/pending/waiting/elapsedMs/waitingSeen/lastWaitMs/main/extra/side/counts/pre/limits/error`）+ `POST /side_swap`（真正换牌）+ `side_ok` 竞态修复**、**`/state.match`（`game`/`over`/`games[]`（含 `win`/`winnerSeat`/`reasonName`）/`gamesWonLocal`/`gamesWonOpp`/`lastWinnerLocal`/`lastReasonName`，配合 `control_match` 一句话报结果）**、`CHAIN raw` 等；Bo3 Game2/3 开局客户端会 `DUEL_START reset result state` 重置 `winPlayer/winReason`）只在客户端 `2026-11-20 15:34:59 / 6,329,856 B`（sha256 `19B8E843CCB22F5CF8399CBA48ED3CFF93373AD992B1295FFB4357E110703521`）及之后存在**；旧 exe 请先升级。详见 [`RANKED-REPORT.md`](RANKED-REPORT.md)。
 9. **被动判死（对手回合 60s eff + `NET silence diag`）**：对手长时间不出手时，客户端会按"对手回合 60s eff"推进判定，并在 `/net` 相关日志打 `NET silence diag`（链路静默诊断，不主动断线）；被动判死不是本仓库 policy 的行为，属客户端/服务端规则。`/net` 的 `alive`/`sinceLastStoc` 在静默期会持续增长——要区分"对手在思考（slow play）"和"对手掉线"，以 `NET silence diag` + `/net.probe` 的 `fails`/`rttMs` 判断；详见 `mycard-client/docs/CONTROL-API.md` 的 `/net` 一节。
 10. **控制驱动下 `STOC_REPLAY` 直接跳过（`replay: dialog skipped`）**：不会弹回放对话框、**不阻塞网络线程**（否则回放保存框会卡住后续 STOC）。**已 LAN 实测**（2026-11-13：双方各 2 次 `replay: dialog skipped (control-driven, no wait)`、`replay-save=0`、`stoc=23 stall=0`）；排位 LP_ZERO 结算场景同样走该路径（不再需要"未实测"假设）。若上线后出现结算后收不到后续包，先查这里。
 11. **prompt 空等 ~90s 会被服务端按 AFK `eof` 踢（MC 排位行为）；LAN srvpro 不踢 eof，而是 180s `TIMEOUT` 判负**（证据 `ranked/logs/eof-guard-validation.md`、`control-23776.log`）。`10:25:14` 版起默认 `YGO_PROMPT_AUTO_DEFAULT_MS=60000` 自动发保守默认动作兜底（45s 先打 `PROMPT idle warning`），可用 `/prompt.awaitingSinceMs` 看等待时长；`0`=关闭（不建议）。

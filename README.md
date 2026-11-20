@@ -27,7 +27,7 @@
 
 | 需要 | 说明 |
 |---|---|
-| **带控制层的 YGOPro 客户端** | 本仓库**不包含**客户端二进制。控制层是客户端源码里的扩展（`gframe/control*.cpp`，HTTP 端点 `/state` `/prompt` `/wait_prompt` `/actions` `/act_id` `/net` `/ui` 等）。<br>**已测试构建**：`YGOPro.exe` **`2026-11-19 17:33:31` / `6,330,368 B`**<br>SHA256：`EC2B9CD1174247B742A77B1A49604F762D5B8D5B3092DC2D3230761A9E16BAF1`<br>核对：`node doctor.mjs --client <exe>`（默认比 size；加 `--strict-build` 同时比 sha256 —— 用于区分"同 size 不同 build"）。<br>构建：用带控制层补丁的 YGOPro 源码（MyCard 客户端 fork）自行编译，产物放到例如 `mycard-client/bin/release/x64/YGOPro.exe`。 |
+| **带控制层的 YGOPro 客户端** | 本仓库**不包含**客户端二进制。控制层是客户端源码里的扩展（`gframe/control*.cpp`，HTTP 端点 `/state` `/prompt` `/wait_prompt` `/actions` `/act_id` `/net` `/ui` 等）。<br>**已测试构建**：`YGOPro.exe` **`2026-11-20 15:34:59` / `6,329,856 B`**<br>SHA256：`19B8E843CCB22F5CF8399CBA48ED3CFF93373AD992B1295FFB4357E110703521`<br>核对：`node doctor.mjs --client <exe>`（默认比 size；加 `--strict-build` 同时比 sha256 —— 用于区分"同 size 不同 build"）。<br>构建：用带控制层补丁的 YGOPro 源码（MyCard 客户端 fork）自行编译，产物放到例如 `mycard-client/bin/release/x64/YGOPro.exe`。 |
 | **Node.js ≥ 18** | 只用内置模块（`fetch`/`http`/`child_process`），**零 npm 依赖**。 |
 | （可选）卡组 `.ydk` | 客户端自己的 `deck/` 目录；控制层用 `POST /deck?name=Blackwing` 预载。本仓库不含卡图/卡表。 |
 
@@ -129,7 +129,8 @@ node doctor.mjs --client "C:\path\to\YGOPro.exe" --strict-build   # 发布自检
 
 ### 更新记录（近期）
 
-- **2026-11-19** 客户端 `17:33:31 / 6,330,368 B`：**看门狗回归修复版**（修 `g_timeLeft` 不清零导致 `clockRunning` 永久 true）——新增 `g_timeLeftTick`，`clockFresh = timeLeft>0 && now-tick<3000`，`clockRunning = ourTurn && clockFresh`；被动判死 `!clockRunning && quiet && since > effSilence`（`effSilence=max(YGO_NET_DEAD_SILENCE_MS, oppTurn&&quiet?60000:0)`）；空闲时每 **15s** 打 `NET heartbeat alive=.. state=.. since=.. ourTurn=.. oppTurn=.. awaiting=.. timeLeft=.. clockFresh=..`；`/net` 新增 `ourTurn/oppTurn/timeLeft/clockFresh`；probe 失败仍只降级不判死。验证 `net-watchdog-validation.md` 4/4 PASS（对手静默 60s 判死、我方 idle 25s 豁免、正常 2min 无误判、真实断开 `state=disconnected`）。**不再建议设 `YGO_NET_DEAD_SILENCE_MS=600000`**（默认 60000，最多 120000）。
+- **2026-11-20** 客户端 `15:34:59 / 6,329,856 B`：**stall 诊断版**（判死逻辑不变）——`STOC_TIME_LIMIT` 对手侧（`who≠我们座位`）更新 `g_oppTimeLeft/g_oppTimeLeftTick`；`/net` 新增 **`stallMs`**（对局中无入站 STOC 毫秒）、**`oppTimeLeft`**、**`oppClockFresh`**（对手倒计时 3s 内刚刷新）；日志 `NET STALL since=.. awaiting=.. ourTurn=.. oppClockFresh=.. oppTimeLeft=.. state=..`（`YGO_STALL_WARN_MS` 默认 **120000**，每 30s 一条）。语义：**`stallMs>120s && oppClockFresh=false` = 对方客户端/服务端卡住 → 离桌重排**（不是我们掉线，也不是对手长考）。
+- **2026-11-19** 客户端 `17:33:31 / 6,330,368 B`（历史）：**看门狗回归修复版**（修 `g_timeLeft` 不清零导致 `clockRunning` 永久 true）——`g_timeLeftTick` + `clockFresh(<3s)` + `clockRunning=ourTurn&&clockFresh`；`/net` 新增 `ourTurn/oppTurn/timeLeft/clockFresh`；heartbeat 空闲时 15s；验证 `net-watchdog-validation.md` 4/4 PASS；**不再建议 600000**（默认 60000）。现已被 `15:34:59` 版取代。
 - **2026-11-17** 客户端 `15:18:21 / 6,329,344 B`（历史）：**逐卡选择修复版**（修"有对象的攻击不结算"）——`/actions` 对 `MSG_SELECT_CARD/TRIBUTE/UNSELECT_CARD`（单目标）每个候选一条 `kind:"select_card"`（label 带 atk/def/loc/seq），`select_auto` 只作多选兜底；`/prompt.selectableCards[]` 新增 `position`、战斗目标窗 `isAttackTarget:true`；单目标 `id=0` 仍等价旧行为；验证 `attack-target-choice-validation.md` A–E PASS。现已被 `17:33:31` 版取代。
 - **2026-11-16** 客户端 `11:31:00 / 6,328,320 B`（历史）：**probe-fails 误判修复版**——`/tip` 探活超时**不再单独判死**（旧版 2 次失败即 `confirmed_dead`+断线，对手长展开 7.5s 静默会被误踢）；probe 失败只置 `probe_failed` 并打 `NET probe failed fails=.. (defer to passive silence guard)`；新增 `YGO_NET_PROBE_FAIL_MAX`（默认 5，仅降级/日志）；判死统一由被动静默 `YGO_NET_DEAD_SILENCE_MS`（默认 60s）+ 我方回合/倒计时/awaiting/busy 守卫决定；现已被 `15:18:21` 版取代。
 - **2026-11-16** 客户端 `10:25:14 / 6,327,808 B`（历史）：**EOF guard 版**（防"LLM 静默 → 服务端 AFK ~90s eof"）——`YGO_PROMPT_AUTO_DEFAULT_MS`（默认 60000，0=关）60s 自动发保守默认、`YGO_PROMPT_IDLE_WARN_MS`（45000）告警、`/prompt.awaitingSinceMs`；现已被 `11:31:00` 版取代。

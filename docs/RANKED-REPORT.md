@@ -290,3 +290,19 @@
   4. **真实断开 → `/net` 正确反映 PASS**（`net-watchdog-eof-20261119-180925`）：`{"connected":false,"closeReason":"error","alive":false,"state":"disconnected","lastNetMsg":{"id":1402,"text":"网络传输发生错误。"}}` + 日志 `NET disconnected reason=error`；对照 kill guest 时服务端先发 `STOC_DUEL_END`，存活侧保持 healthy（正常结束≠掉线）。
 - **口径**：瞬时 `NET DEAD` 后立刻被真实包恢复是预期行为；`/net.alive` 的 200ms 采样可能抓不到该瞬时窗口（不是漏判）。
 - **对 LLM 的要求**：即使看门狗已修，仍建议**每 15–30s 调 `control_net`**（`alive/state/closeReason/sinceLastStoc/probe` + 新诊断字段）；`idle-no-packet`=被动静默判死、`disconnected`=socket 断、`probe_failed` 不是断线。
+
+---
+
+## 16. 2026-11-20 stall 诊断（对方卡住 vs 长考）
+
+- **背景**：真人对局里出现"看起来没动静"的场景，需要区分 **对手正常长考**、**对方客户端/服务端卡住**、**我们自己掉线** 三种情况；旧版只能靠 `sinceLastStoc` 猜。
+- **新增（`2026-11-20 15:34:59 / 6,329,856 / 19B8E843…`，只加诊断、判死逻辑不变）**：
+  - `STOC_TIME_LIMIT` 对手侧（`who≠我们座位`）更新 `g_oppTimeLeft/g_oppTimeLeftTick`；
+  - `/net` 新增 **`stallMs`**（对局中无入站 STOC 的毫秒数）、**`oppTimeLeft`**（对手剩余时间）、**`oppClockFresh`**（对手倒计时 3s 内刚刷新）；
+  - 日志 `NET STALL since=.. awaiting=.. ourTurn=.. oppClockFresh=.. oppTimeLeft=.. state=..`（`YGO_STALL_WARN_MS` 默认 **120000**，每 **30s** 一条，仅诊断）。
+- **判定**：
+  - `stallMs>120000 && oppClockFresh=false` → **对方客户端/服务端卡住**（对手倒计时没在走，不是长考）→ **离桌重排**；
+  - `oppClockFresh=true` → 对手在正常思考/长展开，继续等；
+  - `alive=false`/`state=disconnected` → 是我们自己的连接问题（见 §15）。
+- **`NET DEAD` 不变**：仍按 `YGO_NET_DEAD_SILENCE_MS`（默认 60000）+ our-turn/clockFresh 守卫；stall 只是诊断，不参与判死。
+- **验证**：等 bot-scout 跑（对手卡住场景）；本节 PASS 后补证据。

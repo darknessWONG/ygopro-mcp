@@ -2,7 +2,7 @@
 
 > **读者**：要真正操作这套桥接去排位/局域网打牌的 LLM agent（以及维护它的工程师）。
 > **目标**：零歧义——每一步"做什么、调什么、返回什么、怎么判定成功/失败、失败怎么修"。
-> **当前客户端构建**：`2026-11-19 17:33:31 / 6,330,368 B`，SHA256 `EC2B9CD1174247B742A77B1A49604F762D5B8D5B3092DC2D3230761A9E16BAF1`（`node doctor.mjs --client <exe> --strict-build` 可校验）。
+> **当前客户端构建**：`2026-11-20 15:34:59 / 6,329,856 B`，SHA256 `19B8E843CCB22F5CF8399CBA48ED3CFF93373AD992B1295FFB4357E110703521`（`node doctor.mjs --client <exe> --strict-build` 可校验）。
 > **权威性**：本文是操作流程的权威；字段级契约见 [`MCP-INTERFACE.md`](MCP-INTERFACE.md)，排位实战记录见 [`RANKED-REPORT.md`](RANKED-REPORT.md)，精简单页见 [`MATCH-PLAYBOOK.md`](MATCH-PLAYBOOK.md)。
 > **本文所有示例字段名都按当前客户端真实输出**（可对照 `ranked/logs/playbook-samples/` 下的真实采样）。
 
@@ -504,6 +504,7 @@ control_act({ seq: <当前 seq>, hex: "000201" })
 | `uptimeMs` | 连接存活时长 |
 | `probe` | `{enabled,unsupported,lastSentAt,lastReplyAt,rttMs,fails,lastReplyPlayerType,lastReplyText}`；`fails` 达 fail-max 仅影响 `state`（`probe_failed`），**不会**单独触发断线 |
 | `lastNetMsg` | `{id,text,ageMs}` 最近一条系统消息（`STOC_CHAT`） |
+| **stall（`15:34:59` 起）** | `stallMs`（对局中无入站 STOC 毫秒）、`oppTimeLeft`（对手剩余时间）、`oppClockFresh`（对手倒计时 3s 内刚刷新）。**`stallMs>120000 && oppClockFresh=false` = 对方客户端/服务端卡住** → 离桌重排；日志 `NET STALL since=.. awaiting=.. ourTurn=.. oppClockFresh=.. oppTimeLeft=.. state=..`（`YGO_STALL_WARN_MS` 默认 120000、每 30s） |
 
 > 断线排查优先看 `closeReason` + `lastStocName` + `sinceLastStoc`；`eof` 且 `sinceLastStoc` 很大/很小都可能：小=服务器正在推倒计时后关（AFK 踢），大=链路静默后超时（见 `srvpro-disconnect-research.md`）。
 
@@ -742,6 +743,7 @@ YGO_CONTROL_PORT=7789 YGO_TP=2 YGO_SIDE_AUTO=1 .\YGOPro.exe -h 127.0.0.1 -p 7911
 | 中途 `eof`、`sinceLastStoc` 很小 | 服务端 AFK 踢（~90s） | `/chat` 是否有 afk/倒计时警告；决策耗时 | 决策压到 <60s；无解则 surrender 干净结束 |
 | 中途 `eof`、`sinceLastStoc` 很大 | 链路静默/掉线 | `/net.probe.fails`,`/chat` | 判失联，重排/重连 |
 | **"怎么知道掉线了？"（主动/定时检查）** | 长回合/对手长考时被动判死可能被 `clockRunning` 过期豁免（`17:33:31` 版已修：`clockFresh` 3s 内刷新才算） | **每 15–30s `control_net`**：`alive`、`state`（`healthy/idle/probe_failed/confirmed_dead/disconnected`）、`closeReason`、`sinceLastStoc`、`probe.fails`、`ourTurn/oppTurn/timeLeft/clockFresh`；客户端 `net.heartbeat` 每 15s 一条 | 只有 `alive=false` 或 `state=confirmed_dead/disconnected` 才中止/重排；`probe_failed`/`sinceLastStoc` 增长但 `alive=true` 属长考，继续等 |
+| **对手/服务端卡住（不是掉线、也不是长考）** | `stallMs>120000 && oppClockFresh=false`（`15:34:59` 起可查） | `/net.stallMs`、`/net.oppClockFresh`、`/net.oppTimeLeft`；日志 `NET STALL since=.. oppClockFresh=..`（`YGO_STALL_WARN_MS` 默认 120000/30s） | 离桌重排（`/leave`）；不要等、也别误判成自己掉线 |
 | 排队永远拿不到房 | athletic 无人（深夜）/API 故障 | `authUser` 200、`/ygopro/match/stats/athletic` | 等到白天/换 arena 验证；见 `match-queue-research.md` |
 | `cancel=1` 后仍排队 | 服务端不认 cancel | — | 取消 = abort 请求；不要依赖参数 |
 | Node fetch 报 `HeadersTimeout` | 长轮询超默认头超时 | 脚本超时配置 | 用脚本自带超时重试；不是服务端错误 |
@@ -775,6 +777,7 @@ YGO_CONTROL_PORT=7789 YGO_TP=2 YGO_SIDE_AUTO=1 .\YGOPro.exe -h 127.0.0.1 -p 7911
 16. **prompt 空等 ~90s 会被 MC 排位按 AFK `eof` 踢；LAN srvpro 不踢 eof，而是 180s `TIMEOUT` 判负**（证据 `ranked/logs/eof-guard-validation.md`、`control-23776.log`）。`10:25:14` 版 guard 默认 60s 兜底（`YGO_PROMPT_AUTO_DEFAULT_MS`），`/prompt.awaitingSinceMs` 可看等待时长；别依赖兜底。
 17. **probe（`/tip`）误判——已修复（11:31:00 版）**：旧版 probe 2 次超时即 `NET DEAD reason=probe-fails` + 断线（对手长展开 7.5s 静默被误踢）；新版只降级 `probe_failed`（`YGO_NET_PROBE_FAIL_MAX=5` 仅日志/降级），判死走被动静默。**服务端自身断线无法预防**（该限制保留）。
 18. **掉线检测**：`17:33:31` 版起看门狗已修（`g_timeLeftTick` + `clockRunning = ourTurn && clockFresh<3s`、`effSilence=max(env, oppTurn?60000)`、`/net` 有 `ourTurn/oppTurn/timeLeft/clockFresh`）；_旧版_ 的过期 `g_timeLeft` 会让豁免永远成立（`NET ALIVE reason=our-turn-idle timeLeft=240` 一直 ALIVE）。**仍建议每 15–30s 调 `control_net` 自查**：`idle-no-packet`=被动静默判死、`disconnected`=socket 断、`probe_failed` 单独出现不是断线。`YGO_NET_DEAD_SILENCE_MS` 用默认 **60000**（最多 120000），**不要 600000**。`net.heartbeat` 只在**空闲（`since>10s`）时每 15s** 打一条，连续操作/有包时不打——不是故障；要"无条件定时心跳"需后续版本。
+19. **卡死诊断（`15:34:59` 起）**：`/net.stallMs`（无入站毫秒）、`oppTimeLeft`、`oppClockFresh`；`stallMs>120000 && oppClockFresh=false` = **对方客户端/服务端卡住** → 离桌重排（不是我们掉线、也不是对手长考）。`NET STALL` 日志 `YGO_STALL_WARN_MS` 默认 120000、每 30s，仅诊断不影响判死。
 
 ---
 

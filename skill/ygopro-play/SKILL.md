@@ -87,6 +87,7 @@ while not state.match.over:
 | 对手回合长时间无包 | `turnPlayerLocal!=0` 且 `net.sinceLastStoc` 增长、`timeLeft` 冻结 | 180s 后离开重排 |
 | `net.closeReason=="eof"` | 服务端主动断 | 本场作废重排；若刚 `tpPending` 过 → 就是 TP 超时 |
 | 怀疑掉线（长回合/对手长考） | 每 15–30s `control_net` | `alive=false` 或 `state=confirmed_dead/disconnected` → 中止重排；`idle-no-packet`=被动静默判死、`disconnected`=socket 断；`probe_failed`/`fails` 增长不算断线 |
+| 看起来没动静、但不像掉线 | `/net.stallMs` / `oppClockFresh` / `oppTimeLeft` | `stallMs>120000 && oppClockFresh=false` = **对方客户端/服务端卡住** → 离桌重排；`oppClockFresh=true` 是对手长考，继续等（日志 `NET STALL`，`YGO_STALL_WARN_MS` 默认 120000） |
 | `eof` 前有 `PROMPT publish`、~88s 无 `SEND RESPONSE` | 未答 AFK（MC 排位 ~90s；LAN srvpro 是 180s TIMEOUT） | `10:25:14` 版 guard 60s 自动兜底；`/prompt.awaitingSinceMs` 看等待长度；LLM 60s 内必答 |
 | 卡 `STOC_SELECT_TP` | `prompt.tpPending` | 立刻 `control_act_id`（13s 内） |
 | 卡 `STOC_CHANGE_SIDE` | `state.side.pending` | 两侧 `control_side_done` |
