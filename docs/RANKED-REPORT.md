@@ -313,4 +313,9 @@
   - 最后处理的 msg 是 **73 / 3**（没有新入站）；
   - 结论：**对方/服务端停滞**（对手从未回到 `oppClockFresh=true`），不是我们掉线、也不是客户端 bug/版本回归；与用户报告的两局**完全同型** → 该现象可归因为对方/服务端侧。
   - 处理动作：`control_net` 判定后 **`control_leave` 立即离桌重排**（优先于 `surrender`，见 `MCP-INTERFACE.md` §5.8）。
-- 证据：`ranked/logs/net-stall-validation.md`（bot-scout 正在写；本节已按现场日志与语义闭环补全）。
+- **验证**：
+  1) 真实排位 stall 现场 —— **PASS**（见上，对方/服务端停滞，与用户两局同型）；
+  2) `stallMs`/`oppClockFresh` 判读 —— **PASS**（说明文档语义闭环；`stallMs` 单增不等于卡住，以 `oppClockFresh` 为准）；
+  3) `NET STALL` 日志每 30s —— **PASS**（`YGO_STALL_WARN_MS=120000`，现场可见）；
+  4) **NET DEAD 60s 独立 LAN 回归 PASS**（`net-watchdog-silence-20261120-162036`，正式 build `19B8E843`，用 **7798/7799** 端口避开 runner）：`NET DEAD reason=idle-no-packet since=60016ms eff=60000ms oppTurn=1 clockFresh=0`，随后 `NET alive recovered` —— 判死逻辑未被 stall 诊断改动。
+- 证据索引（四块）：`ranked/logs/net-stall-validation.md` + `ranked/logs/net-watchdog-silence-20261120-162036/`（独立 LAN 60s 回归）+ 真实排位现场日志（bot-scout 只读监控）+ `net-watchdog-validation.md`（前版 4/4 基线）。
