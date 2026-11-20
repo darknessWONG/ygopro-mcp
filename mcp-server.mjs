@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // bridge/mcp-server.mjs - MCP (stdio) server exposing the instrumented client's control API.
 //
-// Tools (19):
+// Tools (20):
 //   control_state        -> GET  /state  (whole match result is passed through as `match`; see control_match)
 //   control_match        -> GET  /state  -> {match, summary}   (one-line human-readable Bo3 result)
 //   control_prompt       -> GET  /prompt (current prompt snapshot, non-blocking)
@@ -14,6 +14,7 @@
 //   control_deck         -> POST /deck?name=
 //   control_start        -> POST /start
 //   control_surrender    -> POST /surrender
+//   control_leave        -> POST /leave (clean exit to main menu; prefer over surrender when the table is stuck)
 //   control_chat         -> GET  /chat
 //   control_join         -> POST /join?ip&port&pass
 //   control_msg          -> GET  /msg

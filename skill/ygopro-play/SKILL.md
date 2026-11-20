@@ -23,11 +23,11 @@ description: 用 MCP 控制层真实操作 YGOPro 客户端打牌（MC 线上排
 
 ## 1. 先确认可用（30 秒）
 
-1. MCP 工具里应能看到 `control_*` 共 **19** 个：`control_state`、`control_match`、`control_prompt`、`control_wait_prompt`、`control_act`、`control_ready`、`control_actions`、`control_act_id`、`control_lobby`、`control_deck`、`control_start`、`control_surrender`、`control_chat`、`control_join`、`control_msg`、`control_health`、`control_net`、`control_side_move`、`control_side_done`。
+1. MCP 工具里应能看到 `control_*` 共 **20** 个：`control_state`、`control_match`、`control_prompt`、`control_wait_prompt`、`control_act`、`control_ready`、`control_actions`、`control_act_id`、`control_lobby`、`control_deck`、`control_start`、`control_surrender`、`control_leave`、`control_chat`、`control_join`、`control_msg`、`control_health`、`control_net`、`control_side_move`、`control_side_done`。
 2. `control_health` → `{"ok":true,...}` 说明客户端控制层在跑（host 7788，guest 7789）。
 3. 没起来：让用户启动，或按第 6 节用脚本起（`ranked-loop.ps1` / `bo3-run.ps1`）。
 
-> 只读安全：`control_state` / `control_prompt` / `control_lobby` / `control_actions` / `control_match` / `control_chat` / `control_msg` / `control_health` / `control_net`。会动 UI：`control_join` / `control_deck` / `control_ready` / `control_start` / `control_act_id` / `control_side_move` / `control_side_done` / `control_surrender`。
+> 只读安全：`control_state` / `control_prompt` / `control_lobby` / `control_actions` / `control_match` / `control_chat` / `control_msg` / `control_health` / `control_net`。会动 UI：`control_join` / `control_deck` / `control_ready` / `control_start` / `control_act_id` / `control_side_move` / `control_side_done` / `control_surrender` / `control_leave`。
 >
 > **掉线检查**：长回合/对手长考/等换备时**每 15–30s 调一次 `control_net`**（`alive`/`state`/`closeReason`/`sinceLastStoc`/`probe` + 新字段 `ourTurn/oppTurn/timeLeft/clockFresh`）；只有 `alive=false` 或 `state=confirmed_dead/disconnected` 才处理（`idle-no-packet`=被动静默判死、`disconnected`=socket 断、`probe_failed` 不算断线）。客户端 `net.heartbeat` 只在**空闲（`since>10s`）时每 15s** 打一条，连续操作时不打=正常，不是故障。
 
@@ -87,7 +87,7 @@ while not state.match.over:
 | 对手回合长时间无包 | `turnPlayerLocal!=0` 且 `net.sinceLastStoc` 增长、`timeLeft` 冻结 | 180s 后离开重排 |
 | `net.closeReason=="eof"` | 服务端主动断 | 本场作废重排；若刚 `tpPending` 过 → 就是 TP 超时 |
 | 怀疑掉线（长回合/对手长考） | 每 15–30s `control_net` | `alive=false` 或 `state=confirmed_dead/disconnected` → 中止重排；`idle-no-packet`=被动静默判死、`disconnected`=socket 断；`probe_failed`/`fails` 增长不算断线 |
-| 看起来没动静、但不像掉线 | `/net.stallMs` / `oppClockFresh` / `oppTimeLeft` | `stallMs>120000 && oppClockFresh=false` = **对方客户端/服务端卡住** → 离桌重排；`oppClockFresh=true` 是对手长考，继续等（日志 `NET STALL`，`YGO_STALL_WARN_MS` 默认 120000） |
+| 看起来没动静、但不像掉线 | `/net.stallMs` / `oppClockFresh` / `oppTimeLeft` | `stallMs>120000 && oppClockFresh=false` = **对方客户端/服务端卡住** → **`control_leave` 离桌重排（优先于 surrender）**；`oppClockFresh=true` 是对手长考，继续等（日志 `NET STALL`，`YGO_STALL_WARN_MS` 默认 120000；判读以 `oppClockFresh` 为准） |
 | `eof` 前有 `PROMPT publish`、~88s 无 `SEND RESPONSE` | 未答 AFK（MC 排位 ~90s；LAN srvpro 是 180s TIMEOUT） | `10:25:14` 版 guard 60s 自动兜底；`/prompt.awaitingSinceMs` 看等待长度；LLM 60s 内必答 |
 | 卡 `STOC_SELECT_TP` | `prompt.tpPending` | 立刻 `control_act_id`（13s 内） |
 | 卡 `STOC_CHANGE_SIDE` | `state.side.pending` | 两侧 `control_side_done` |

@@ -54,7 +54,7 @@
         └───────────┬────────────┘
                     │ MCP (stdio, JSON-RPC)
         ┌───────────▼────────────┐
-        │ bridge/mcp-server.mjs  │   薄桥：19 个工具 → HTTP
+        │ bridge/mcp-server.mjs  │   薄桥：20 个工具 → HTTP
         └───────────┬────────────┘
                     │ HTTP 127.0.0.1:7788（房主）/ 7789（客人）
         ┌───────────▼───────────────────────────────────────┐
@@ -103,7 +103,7 @@
 
 ---
 
-## 2. MCP 工具清单（`bridge/mcp-server.mjs` 的 19 个工具）
+## 2. MCP 工具清单（`bridge/mcp-server.mjs` 的 20 个工具）
 
 > 全部无参数或只有简单参数；返回体就是对应 HTTP 端点的 JSON（原文透传，见 §4）。**例外**：`control_match` 返回派生的 `{match, summary}`（见 §5.6）。
 
@@ -127,7 +127,8 @@
 | 16 | `control_side_done` | **Bo3 换备**：换完牌点"确定"继续下一局（等价 `btnSideOK`） | — | 先 `GET /actions` 找 `kind=side_ok` 的 id，再 `GET /act_id?id=` |
 | 17 | `control_match` | **整场结果一句话**（谁赢/为什么/大比分/是否结束，详见 §5.6） | — | `GET /state`，读 `state.match` 派生 |
 | 18 | `control_prompt` | **当前 prompt 快照（不阻塞）**：seq/awaiting/curMsg/tpPending/sidePending/候选计数 | — | `GET /prompt` |
-| 19 | `control_net` | **掉线/存活检查（轮询用，详见 §5.7）**：connected/joined/inDuel/alive/state/closeReason/lastStocName/sinceLastStoc/probe/lastNetMsg + 诊断字段 | — | `GET /net` |
+| 19 | `control_net` | **掉线/存活检查（轮询用，详见 §5.7）**：connected/joined/inDuel/alive/state/closeReason/lastStocName/sinceLastStoc/probe/lastNetMsg + `stallMs/oppTimeLeft/oppClockFresh` | — | `GET /net` |
+| 20 | `control_leave` | **干净离桌回主菜单**（卡住时优先于 surrender，详见 §5.8） | — | `POST /leave` |
 
 **MCP 连接示例（JSON-RPC over stdio）**
 
@@ -584,6 +585,21 @@ LLM 想回答"**我赢了吗/为什么赢/大比分多少/比赛结束没**"时�
 > **不要**再长期设 `YGO_NET_DEAD_SILENCE_MS=600000`（真掉线要 10 分钟才发现；probe 误判已修）。默认 **60000** 即可，最多 120000；`17:33:31` 版起看门狗用 `clockFresh`（3s 内刷新才算"倒计时在走"），`our-turn-idle` 不再因过期 `g_timeLeft` 永远豁免。
 
 **旧客户端降级**：没有 `ourTurn/oppTurn/timeLeft/clockFresh` 时按 `alive`+`state`+`sinceLastStoc`+`closeReason` 判断。
+
+### 5.8 离桌（`control_leave`，`POST /leave`）
+
+**语义**：干净离开当前房间/对局，回到主菜单；释放本桌（服务端立即知道我们走了，不再等对局结算）。
+
+**什么时候用**：
+- **卡住时优先于 `control_surrender`**：`control_net` 显示 `stallMs>120000 && oppClockFresh=false`（对方客户端/服务端卡住）、或确认无法继续（对手掉线且不会回来）→ **`control_leave` 立即离桌重排**；
+- `surrender` 会让本场结果**按规则结算完**（还要等 `STOC_DUEL_END`/换备等），`leave` 直接释放、更快重排；
+- 正常整场结束（`STOC_DUEL_END`）后也可以直接 `leave` 收尾。
+
+**不要用**：对局还有救、只是对手在长考（`oppClockFresh=true`）——离桌等于放弃本场。
+
+**返回**：`{"ok":true,"queued":true}`（客户端会关对局/回主菜单；随后用 `control_state`/`control_net` 确认 `inDuel=false`、`joined=false`，再重新排队）。
+
+**注意**：`leave` 虽然立即生效，但服务端可能仍把本场记为你的离场（与 surrender 的结算不同）；排位连续跑可用它跳过卡死桌、重排下一场。
 
 ---
 

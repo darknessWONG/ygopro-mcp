@@ -41,7 +41,7 @@
 LLM / agent
    │  MCP (JSON-RPC over stdio)
    ▼
-bridge/mcp-server.mjs        ← 18 个 MCP 工具（薄桥，返回就是 HTTP JSON 原文，control_match 例外）
+bridge/mcp-server.mjs        ← 20 个 MCP 工具（薄桥，返回就是 HTTP JSON 原文，control_match 例外）
    │  HTTP 127.0.0.1:7788（房主）/ :7789（客机）
    ▼
 YGOPro 客户端（带控制层的构建，gframe/control*.cpp）
@@ -62,7 +62,7 @@ YGOPro 客户端（带控制层的构建，gframe/control*.cpp）
 
 ### 1.2 谁负责什么
 
-- `bridge/mcp-server.mjs`：MCP stdio 桥，18 个工具 → HTTP。
+- `bridge/mcp-server.mjs`：MCP stdio 桥，20 个工具 → HTTP。
 - `bridge/get-room.mjs`：登录态的 token → `authUser` → `POST /ygopro/match`（长轮询）→ 打印 `{address,port,password,name,id,stale}`。
 - `bridge/ranked-loop.ps1`：连续排位自动化（排队→进房→deck→ready→start→对局→换备→下一局→DUEL_END→重排）。
 - `bridge/policy-semantic.mjs`：参考策略（可当 LLM 的替身；LLM 自己操作时**不要同时跑**，会抢动作）。
@@ -70,7 +70,7 @@ YGOPro 客户端（带控制层的构建，gframe/control*.cpp）
 
 ---
 
-## 2. 工具速查表（18 个，按 `mcp-server.mjs` 实际注册顺序核对）
+## 2. 工具速查表（20 个，按 `mcp-server.mjs` 实际注册顺序核对）
 
 > 通用约定：**除 `control_match` 外，返回值就是对应 HTTP 端点的 JSON 原文**（失败/异常时 MCP 返回 `isError` 文本，不会静默）。所有工具**无必填参数**，除 `control_act`(`seq`)、`control_act_id`(`id`)、`control_side_move`(`code/from/to`)。
 
@@ -94,6 +94,8 @@ YGOPro 客户端（带控制层的构建，gframe/control*.cpp）
 | 16 | `control_health` | — | `GET /health` | 控制层存活 |
 | 17 | `control_side_move` | `code`,`from`,`to`,`n` | `POST /side_swap` | Bo3 换备：移动 N 张卡 |
 | 18 | `control_side_done` | — | `/actions`+`/act_id` | Bo3 换备：确认（等价 `side_ok`） |
+| 19 | `control_net` | — | `GET /net` | 掉线/卡死检查（每 15–30s；`stallMs`/`oppClockFresh` 判对方卡住） |
+| 20 | `control_leave` | — | `POST /leave` | 干净离桌回主菜单（卡住时**优先于 surrender**） |
 
 ### 2.1 逐个工具的返回/适用/失败
 
@@ -381,7 +383,7 @@ control_act({ seq: <当前 seq>, hex: "000201" })
 
 **报告**：`control_match()` → `summary`（例：`比赛结束：你赢了这场 Bo3（2:0）。最后一局原因：对手掉线/失联（DISCONNECT）`）。
 
-**收尾**：`POST /leave`（`control_*` 无 leave 工具，用 HTTP：`http://127.0.0.1:7788/leave`）→ 杀客户端 → 重新排队（`get-room.mjs`）。
+**收尾**：`control_leave()`（`POST /leave`，干净回主菜单）→ 杀客户端 → 重新排队（`get-room.mjs`）。卡住时也用它（优先于 `control_surrender`）。
 
 ### 3.12 异常与判定（每种都给"依据 + 动作 + 日志关键字"）
 
@@ -743,7 +745,7 @@ YGO_CONTROL_PORT=7789 YGO_TP=2 YGO_SIDE_AUTO=1 .\YGOPro.exe -h 127.0.0.1 -p 7911
 | 中途 `eof`、`sinceLastStoc` 很小 | 服务端 AFK 踢（~90s） | `/chat` 是否有 afk/倒计时警告；决策耗时 | 决策压到 <60s；无解则 surrender 干净结束 |
 | 中途 `eof`、`sinceLastStoc` 很大 | 链路静默/掉线 | `/net.probe.fails`,`/chat` | 判失联，重排/重连 |
 | **"怎么知道掉线了？"（主动/定时检查）** | 长回合/对手长考时被动判死可能被 `clockRunning` 过期豁免（`17:33:31` 版已修：`clockFresh` 3s 内刷新才算） | **每 15–30s `control_net`**：`alive`、`state`（`healthy/idle/probe_failed/confirmed_dead/disconnected`）、`closeReason`、`sinceLastStoc`、`probe.fails`、`ourTurn/oppTurn/timeLeft/clockFresh`；客户端 `net.heartbeat` 每 15s 一条 | 只有 `alive=false` 或 `state=confirmed_dead/disconnected` 才中止/重排；`probe_failed`/`sinceLastStoc` 增长但 `alive=true` 属长考，继续等 |
-| **对手/服务端卡住（不是掉线、也不是长考）** | `stallMs>120000 && oppClockFresh=false`（`15:34:59` 起可查） | `/net.stallMs`、`/net.oppClockFresh`、`/net.oppTimeLeft`；日志 `NET STALL since=.. oppClockFresh=..`（`YGO_STALL_WARN_MS` 默认 120000/30s） | 离桌重排（`/leave`）；不要等、也别误判成自己掉线 |
+| **对手/服务端卡住（不是掉线、也不是长考）** | `stallMs>120000 && oppClockFresh=false`（`15:34:59` 起可查；**以 `oppClockFresh` 为准，stallMs 单看可能自然增长**） | `/net.stallMs`、`/net.oppClockFresh`、`/net.oppTimeLeft`；日志 `NET STALL since=.. oppClockFresh=..`（`YGO_STALL_WARN_MS` 默认 120000/30s） | **`control_leave` 离桌重排（优先于 surrender：surrender 要等结算，leave 立即释放）**；不要等、也别误判成自己掉线 |
 | 排队永远拿不到房 | athletic 无人（深夜）/API 故障 | `authUser` 200、`/ygopro/match/stats/athletic` | 等到白天/换 arena 验证；见 `match-queue-research.md` |
 | `cancel=1` 后仍排队 | 服务端不认 cancel | — | 取消 = abort 请求；不要依赖参数 |
 | Node fetch 报 `HeadersTimeout` | 长轮询超默认头超时 | 脚本超时配置 | 用脚本自带超时重试；不是服务端错误 |
@@ -767,7 +769,7 @@ YGO_CONTROL_PORT=7789 YGO_TP=2 YGO_SIDE_AUTO=1 .\YGOPro.exe -h 127.0.0.1 -p 7911
 6. **深链未实测**：真实对局只验证到 `chainDepth=1`；`depth>=2` 按语义推演。
 7. **UI 注入非 100%**：`place`/`attack` 偶发点击失效会直连回退（`UI fallback`，残余 5%~11%）。
 8. **策略与 LLM 不可同时跑**：会互相抢动作；二选一。
-9. **`/leave` 是 HTTP 端点**（MCP 无对应工具）：`POST http://127.0.0.1:7788/leave`。
+9. **离桌用 `control_leave`**（`POST /leave`）：干净回主菜单、立即释放本桌；**卡住时优先于 `control_surrender`**（surrender 要按规则结算完，leave 立即释放）。判定：`stallMs>120000 && oppClockFresh=false`（对方卡住）或确认无法继续。
 10. **指纹/构建**：本文档对应 `2026-11-17 15:18:21 / 6,329,344 B`；更旧 exe 缺 `/state.match`/side/announce/`awaitingSinceMs`/`select_card` 等，`control_match` 会降级（`fallback:true`）。
 11. **多怪兽攻击目标——已修复（19:05:42 起，20:11:00 含；15:18:21 起可逐卡选）**：旧 exe 在 `MSG_SELECT_BATTLECMD` 的攻击目标选择会被内核拒绝（`curMsg` 15↔10 反复、攻击消耗不结算）；当前版已修复（LAN 实机 PASS）。**`15:18:21` 起 `select_card` 可按 `atk/def` 选具体目标；`select_auto` 仍等价旧"永远第一只"（只作多选兜底）**。旧 exe 仍降级：直接攻击/`to_m2`/`end_battle`/`to_ep`（见 §3.7.2）。
 12. **TP 自动应答（19:05:42 版起）**：控制驱动下默认 ~2s 自动答**后攻（`res=2`）**（`YGO_TP_AUTO`/`YGO_TP_AUTO_RES`，`YGO_TP_AUTO_RES=1` 可改先攻）；要人工覆盖必须 2s 内，13s 是服务端硬上限（见 §3.6 / §0.1）。
@@ -777,7 +779,7 @@ YGO_CONTROL_PORT=7789 YGO_TP=2 YGO_SIDE_AUTO=1 .\YGOPro.exe -h 127.0.0.1 -p 7911
 16. **prompt 空等 ~90s 会被 MC 排位按 AFK `eof` 踢；LAN srvpro 不踢 eof，而是 180s `TIMEOUT` 判负**（证据 `ranked/logs/eof-guard-validation.md`、`control-23776.log`）。`10:25:14` 版 guard 默认 60s 兜底（`YGO_PROMPT_AUTO_DEFAULT_MS`），`/prompt.awaitingSinceMs` 可看等待时长；别依赖兜底。
 17. **probe（`/tip`）误判——已修复（11:31:00 版）**：旧版 probe 2 次超时即 `NET DEAD reason=probe-fails` + 断线（对手长展开 7.5s 静默被误踢）；新版只降级 `probe_failed`（`YGO_NET_PROBE_FAIL_MAX=5` 仅日志/降级），判死走被动静默。**服务端自身断线无法预防**（该限制保留）。
 18. **掉线检测**：`17:33:31` 版起看门狗已修（`g_timeLeftTick` + `clockRunning = ourTurn && clockFresh<3s`、`effSilence=max(env, oppTurn?60000)`、`/net` 有 `ourTurn/oppTurn/timeLeft/clockFresh`）；_旧版_ 的过期 `g_timeLeft` 会让豁免永远成立（`NET ALIVE reason=our-turn-idle timeLeft=240` 一直 ALIVE）。**仍建议每 15–30s 调 `control_net` 自查**：`idle-no-packet`=被动静默判死、`disconnected`=socket 断、`probe_failed` 单独出现不是断线。`YGO_NET_DEAD_SILENCE_MS` 用默认 **60000**（最多 120000），**不要 600000**。`net.heartbeat` 只在**空闲（`since>10s`）时每 15s** 打一条，连续操作/有包时不打——不是故障；要"无条件定时心跳"需后续版本。
-19. **卡死诊断（`15:34:59` 起）**：`/net.stallMs`（无入站毫秒）、`oppTimeLeft`、`oppClockFresh`；`stallMs>120000 && oppClockFresh=false` = **对方客户端/服务端卡住** → 离桌重排（不是我们掉线、也不是对手长考）。`NET STALL` 日志 `YGO_STALL_WARN_MS` 默认 120000、每 30s，仅诊断不影响判死。
+19. **卡死诊断（`15:34:59` 起）**：`/net.stallMs`（无入站毫秒）、`oppTimeLeft`、`oppClockFresh`；`stallMs>120000 && oppClockFresh=false` = **对方客户端/服务端卡住** → **`control_leave` 离桌重排（优先于 surrender）**（不是我们掉线、也不是对手长考）。`NET STALL` 日志 `YGO_STALL_WARN_MS` 默认 120000、每 30s，仅诊断不影响判死。**判读以 `oppClockFresh` 为准**，`stallMs` 单独增长可能只是对手回合 `TIME_LIMIT` 没推给我们。真实排位现场已复现（16:05:19 后 60s `NET DEAD idle-no-packet` + 120s `NET STALL oppClockFresh=0`、socket 未断；见 `RANKED-REPORT.md` §16）。
 
 ---
 

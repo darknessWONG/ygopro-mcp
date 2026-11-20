@@ -305,4 +305,12 @@
   - `oppClockFresh=true` → 对手在正常思考/长展开，继续等；
   - `alive=false`/`state=disconnected` → 是我们自己的连接问题（见 §15）。
 - **`NET DEAD` 不变**：仍按 `YGO_NET_DEAD_SILENCE_MS`（默认 60000）+ our-turn/clockFresh 守卫；stall 只是诊断，不参与判死。
-- **验证**：等 bot-scout 跑（对手卡住场景）；本节 PASS 后补证据。
+- **stallMs 判读以 `oppClockFresh` 为准**：对手回合的 `TIME_LIMIT` 不一定每秒推给我们，`stallMs` 可能自然增长——只有 `oppClockFresh=false`（对手倒计时 3s 内没刷新）才说明**对方真卡住**；`oppClockFresh=true` 是长考/长展开，继续等。
+- **真实排位现场（PASS）**：2026-11-20 16:0x 一局（bot-scout 只读监控同一场）：
+  - 开局 `turn=2`、LP `[8000,4000]`；**16:05:19 最后一条 STOC**；
+  - +60s：`NET DEAD reason=idle-no-packet`（注意 `/net.connected=true`、`closeReason=none`——**socket 没断，是静默判死**）；
+  - +120s：`NET STALL since=.. awaiting=.. ourTurn=.. oppClockFresh=0 oppTimeLeft=196 state=..` 每 **30s** 重复；`stallMs` 单调增；
+  - 最后处理的 msg 是 **73 / 3**（没有新入站）；
+  - 结论：**对方/服务端停滞**（对手从未回到 `oppClockFresh=true`），不是我们掉线、也不是客户端 bug/版本回归；与用户报告的两局**完全同型** → 该现象可归因为对方/服务端侧。
+  - 处理动作：`control_net` 判定后 **`control_leave` 立即离桌重排**（优先于 `surrender`，见 `MCP-INTERFACE.md` §5.8）。
+- 证据：`ranked/logs/net-stall-validation.md`（bot-scout 正在写；本节已按现场日志与语义闭环补全）。
