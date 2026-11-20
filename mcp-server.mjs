@@ -283,6 +283,11 @@ const TOOLS = [
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
+    name: 'control_leave',
+    description: 'Leave the current room/duel cleanly and return to the main menu (POST /leave). Use it when the table is stuck - e.g. control_net shows stallMs > 120000 with oppClockFresh=false, which means the opponent or the server stopped advancing (not our link dropping) - then requeue. Prefer this over control_surrender: surrender still plays out the result, leaving frees the client immediately.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
     name: 'control_chat',
     description: 'Recent server chat / system messages (useful to see why a room was rejected or a duel was kicked).',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
@@ -377,6 +382,7 @@ async function callTool(name, args) {
     case 'control_chat': return http('/chat');
     case 'control_start': return http('/start', 'POST');
     case 'control_surrender': return http('/surrender', 'POST');
+    case 'control_leave': return http('/leave', 'POST');
     case 'control_deck': return http('/deck?name=' + encodeURIComponent(args?.name ?? 'Blackwing'), 'POST');
     case 'control_ready': return http('/ready', 'POST');
     case 'control_join': return http('/join?' + qs(args), 'POST');
