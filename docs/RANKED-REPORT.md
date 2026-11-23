@@ -319,3 +319,25 @@
   3) `NET STALL` 日志每 30s —— **PASS**（`YGO_STALL_WARN_MS=120000`，现场可见）；
   4) **NET DEAD 60s 独立 LAN 回归 PASS**（`net-watchdog-silence-20261120-162036`，正式 build `19B8E843`，用 **7798/7799** 端口避开 runner）：`NET DEAD reason=idle-no-packet since=60016ms eff=60000ms oppTurn=1 clockFresh=0`，随后 `NET alive recovered` —— 判死逻辑未被 stall 诊断改动。
 - 证据索引（四块）：`ranked/logs/net-stall-validation.md` + `ranked/logs/net-watchdog-silence-20261120-162036/`（独立 LAN 60s 回归）+ 真实排位现场日志（bot-scout 只读监控）+ `net-watchdog-validation.md`（前版 4/4 基线）。
+
+---
+
+## 17. 2026-11-23 MCP 实战反馈修复（`14:53:57 / 6,334,464 / 6B7DD189…`）
+
+来源：用户 MCP 化实战 BUG 报告（`ygo_pro_bot_dsh/logs/2026-11-23/BUG-REPORT-mcp.md`），poc 修复并出 `14:53:57` 版：
+
+1. **`wait_prompt` 陈旧快照（BUG-2，已修）**
+   - 现象：链已推进（`chainDepth` 1→2→3），`wait_prompt` 却反复返回同一旧快照（`seq` 重复）；`awaiting=false` 时**不阻塞、立刻返回旧快照**。
+   - 修复：`/wait_prompt` 改为**阻塞到"新的且真正 awaiting 的 prompt"**（`seq>since && awaiting`），超时才返回最新快照；旧版 `|| !awaiting` 的 bug 去掉。
+   - 文档纪律（仍建议）：判进度用 `/state`/`/actions`（新鲜）、轮询用 `/prompt`（非阻塞）；`wait_prompt` 只当"等下一个决策点"。
+2. **候选卡 `ctrl/isMine` 恒 0/false（已修）**
+   - 现象：我方卡显示 `ctrl:0`、`isMine:false`，判断敌我一度只能靠卡名反查。
+   - 修复：候选卡字段修正；新增 `selectableCards[].resp`。
+3. **选卡响应字节 = `seqNo`/`resp`，不是列表下标（BUG-3，已修+字段化）**
+   - 现象：`selectableCards[].i` 是列表下标，但响应字节要的是 `seqNo`（select_seq）；按 `i` 拼 hex 会选错卡（实战白送一张强欲而贪欲之壶）。
+   - 修复：候选卡新增 **`resp`**（= `seqNo`）；**响应 `hex="01"+resp hex`**；文档强调首选 `control_actions` 的 `kind:"select_card"`，不要手拼。
+4. **BUG-1 归类：外部断线（D-DISCONNECT）**
+   - 现象：应答已发出（`SEND RESPONSE ... i=1`）后服务端无任何 STOC、probe 连续超时（`fails=1..5`）、最终 `NET disconnected reason=error`；`match.games` 为空 → 整场作废。
+   - 归类：**服务端/网络侧外部断线，不是客户端逻辑 bug**（客户端按规范检测上报）；1 次不足以定性，第 2 次按 `PITFALLS-2026-11.md` 取证。
+5. **Game1 `reason=3 TIMEOUT` 判负（节奏问题，已写入 skill）**：240s 回合时钟被"每步查卡/翻文档/反复全量读"耗尽；文档已加"打牌纪律 / 时间预算"（一回合约 30 次调用硬预算）。
+- **验证**：待 bot-scout（PASS 后本节补证据，`ranked/logs/`）。

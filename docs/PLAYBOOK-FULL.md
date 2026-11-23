@@ -2,7 +2,7 @@
 
 > **读者**：要真正操作这套桥接去排位/局域网打牌的 LLM agent（以及维护它的工程师）。
 > **目标**：零歧义——每一步"做什么、调什么、返回什么、怎么判定成功/失败、失败怎么修"。
-> **当前客户端构建**：`2026-11-20 15:34:59 / 6,329,856 B`，SHA256 `19B8E843CCB22F5CF8399CBA48ED3CFF93373AD992B1295FFB4357E110703521`（`node doctor.mjs --client <exe> --strict-build` 可校验）。
+> **当前客户端构建**：`2026-11-23 14:53:57 / 6,334,464 B`，SHA256 `6B7DD18960E0511FB9548684EDE7B13B438FFF4E5D48EED4F47AC846BFC91BBB`（`node doctor.mjs --client <exe> --strict-build` 可校验）。
 > **权威性**：本文是操作流程的权威；字段级契约见 [`MCP-INTERFACE.md`](MCP-INTERFACE.md)，排位实战记录见 [`RANKED-REPORT.md`](RANKED-REPORT.md)，精简单页见 [`MATCH-PLAYBOOK.md`](MATCH-PLAYBOOK.md)。
 > **本文所有示例字段名都按当前客户端真实输出**（可对照 `ranked/logs/playbook-samples/` 下的真实采样）。
 
@@ -262,14 +262,14 @@ loop:
   lastSeq = a.seq                                             # 用 actions 的 seq（新鲜）
 ```
 
-**`control_wait_prompt` 语义（BUG-2，必读）**：
-- **设计语义**：阻塞到"新的且 `awaiting=true`"的 prompt；超时返回当前最新快照。
-- **当前实现 bug**：`awaiting=false` 时会**立刻返回旧快照**（`seq` 重复、字段旧），不能用来判断进度。**修好后也建议按下面的纪律做**。
-- **正确做法**：
+**`control_wait_prompt` 语义（BUG-2，`14:53:57` 已修）**：
+- **现版本语义**：阻塞到"新的且 `awaiting=true`"的 prompt（`seq>since && awaiting`）；超时返回当前最新快照。
+- **旧版（≤15:34:59，已修）行为**：`awaiting=false` 时**立刻返回旧快照**（`seq` 重复、字段旧），不能用来判断进度。
+- **正确做法（无论版本都建议）**：
   - 判断进度/当前状态 → `control_state` / `control_actions`（新鲜）；
   - 想轮询看看 → `control_prompt`（非阻塞）；
-  - `wait_prompt` 只当"停下来等下一个决策点"，**拿到返回值后仍要用 `control_actions` 核对 seq/kind 再动作**；
-  - 永远不要用 `wait_prompt` 的旧快照判断"链推进到哪/对手做了没有"；回动作的 seq 用 `control_actions.seq`。
+  - `wait_prompt` 只当"停下来等下一个决策点"；拿到返回值后仍建议用 `control_actions` 核对 seq/kind 再动作；
+  - 回动作的 seq 用 `control_actions.seq`；旧版旧快照不能判断"链推进到哪/对手做了没有"。
 
 **kind → 选择语义**（完整表见 `MCP-INTERFACE.md` §5；这里给决策要点）：
 
@@ -512,7 +512,7 @@ control_act({ seq: <当前 seq>, hex: "000201" })
 |---|---|
 | 基础 | `seq` `curMsg` `turn` `awaiting` `awaitingSinceMs`（等待已持续毫秒；>45s 有 `PROMPT idle warning`，60s 自动兜底） |
 | 可召唤计数 | `summonable` `spsummonable` `msetable` `ssetable` `reposable` `activatable` `attackable` `chains` `chainForced` `lastChain` |
-| 选卡 | `selectMin` `selectMax` `selectCancelable` `selectableCount` `selectableCards`（每项含 `i/code/atk/def/lv/position/loc/seqNo`）。**`i` 是列表下标（只给 `control_actions` id 用）；响应字节必须用 `seqNo`：`hex="01"+seqNo hex`**（如列表第 4 个、`seqNo=9` → `hex="0109"`）。首选 `control_actions` 的 `kind:"select_card"` id，别手拼 hex；**`isAttackTarget`**（`15:18:21` 起：战斗目标窗=true，必须用 `select_card` 按 `atk/def` 选） |
+| 选卡 | `selectMin` `selectMax` `selectCancelable` `selectableCount` `selectableCards`（每项含 `i/code/atk/def/lv/position/loc/seq,seqNo,resp,ctrl,isMine`；`14:53:57` 起 `ctrl/isMine` 已修、新增 `resp`）。**`i` 是列表下标（只给 `control_actions` id 用）；响应字节用 `resp`（= `seqNo`，select_seq）：`hex="01"+resp hex`**（如 `resp=9` → `hex="0109"`）。首选 `control_actions` 的 `kind:"select_card"` id，别手拼 hex；**`isAttackTarget`**（`15:18:21` 起：战斗目标窗=true，必须用 `select_card` 按 `atk/def` 选） |
 | 宣言 | `announceNumberValues`（仅 `MSG_ANNOUNCE_NUMBER(143)`：可用数值列表，`announce_number` 的候选；响应=数值本身） |
 | 阶段 | `canBp` `canEp` |
 | 候选卡 | `summonableCards` `spsummonableCards` `msetableCards` `ssetableCards` `activatableCards` `attackableCards` |

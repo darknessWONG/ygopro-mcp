@@ -73,8 +73,8 @@ GET /act_id?id=1     # 后攻（index=2）
 ```
 
 - `awaiting=false` 表示**现在不需要你动作**（通常是对手回合或连锁在对手那边）——不要乱发 `/act_id`。
-- **`wait_prompt` 只用来"等下一个待答窗口"**：旧版在 `awaiting=false` 时会立刻返回**旧快照**（不能用来判断进度）；判进度用 `/state` 或 `/actions`（新鲜），轮询用 `/prompt`（非阻塞）；回动作的 `seq` 用 `/actions.seq`。
-- **选卡响应字节用 `seqNo`，不是列表下标**：`/prompt.selectableCards[].i` 只是列表下标（给 `/actions` 的 id 用）；`hex = "01" + seqNo hex`（如 `seqNo=9` → `hex="0109"`）。首选 `/actions` 的 `kind:"select_card"` id，不要手拼。
+- **`wait_prompt` 只用来"等下一个待答窗口"**：`14:53:57` 起**阻塞到新的 `awaiting=true`**（超时返回最新）；**旧版（≤15:34:59）在 `awaiting=false` 时会立刻返回旧快照**（不能用来判断进度）。判进度用 `/state` 或 `/actions`（新鲜），轮询用 `/prompt`（非阻塞）；回动作的 `seq` 用 `/actions.seq`。
+- **选卡响应字节用 `resp`/`seqNo`，不是列表下标**：`/prompt.selectableCards[].i` 只是列表下标（给 `/actions` 的 id 用）；`resp`（= `seqNo`）= select_seq，`hex = "01" + resp hex`（如 `resp=9` → `hex="0109"`）。首选 `/actions` 的 `kind:"select_card"` id，不要手拼；`ctrl/isMine` 字段也已修正。
 - **回合时钟约 240s，每次工具往返 3–10s → 一回合约 30 次调用**：先规划好再动手，机械步骤（召唤/摆位/表示形式/攻击）一次做完；每回合开头读一次 `/state`，之后只 `/actions`→`/act_id`。
 - 看到 `/prompt.tpPending` → 走第 4 节；看到 `/prompt.sidePending` → 走第 6 节。
 - 若 `awaiting=true` 且 `/actions` 为空持续 >30s：先查 `/ui.windowsVisible` 是否有阻塞窗（`wQuery/wCardSelect/...`），再看 `/state.pipeline` 与客户端日志；这是客户端 bug，不是"该等"。

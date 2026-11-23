@@ -59,9 +59,9 @@ while not state.match.over:
   control_act_id(选中的 id, seq=a.seq)
 ```
 
-**`control_wait_prompt` 语义（BUG-2）**：设计语义=阻塞到新的 `awaiting=true`；旧版 bug=`awaiting=false` 时立刻返回**旧快照**。所以：**判进度用 `control_state`/`control_actions`，轮询用 `control_prompt`，`wait_prompt` 只当"停下来等"**；回动作的 `seq` 用 `actions.seq`。
+**`control_wait_prompt` 语义（BUG-2，`14:53:57` 已修）**：现版本=**阻塞到新的 `awaiting=true`**（`seq>since && awaiting`），超时返回最新快照；旧版（≤15:34:59）在 `awaiting=false` 时会立刻返回**旧快照**。所以：**判进度用 `control_state`/`control_actions`，轮询用 `control_prompt`，`wait_prompt` 只当"停下来等"**；回动作的 `seq` 用 `actions.seq`。
 
-**选卡字节（BUG-3）**：`/prompt.selectableCards[].i` 是**列表下标**（只给 actions id 用）；**响应 hex 必须用 `seqNo`**：`hex="01"+seqNo hex`（`seqNo=9` → `"0109"`）。**首选 `control_actions` 的 `kind:"select_card"` id**，别手拼 hex。
+**选卡字节（BUG-3，`14:53:57` 已修并加 `resp`）**：`/prompt.selectableCards[].i` 是**列表下标**（只给 actions id 用）；**响应 hex 用 `resp`（= `seqNo`）**：`hex="01"+resp hex`（`resp=9` → `"0109"`）。**首选 `control_actions` 的 `kind:"select_card"` id**，别手拼 hex；`ctrl/isMine` 字段也已修正。
 
 **打牌纪律 / 时间预算（必读，实测 TIMEOUT 判负）**：MC 回合时钟约 **240s**，每次工具往返 3–10s → **一回合约 30 次调用的硬预算**。
 1. 开打前按卡组文档想好本回合展开线，**中途不查卡/不查文档**；
