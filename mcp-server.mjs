@@ -224,7 +224,7 @@ const TOOLS = [
   {
     name: 'control_wait_prompt',
     description: 'Long-poll for the NEXT prompt that needs an answer (GET /wait_prompt?since&timeout_ms). Intended semantics: block until a NEW prompt with awaiting=true arrives (or timeout, then return the current latest snapshot). ' +
-      'IMPORTANT (currently implemented bug on older builds): while awaiting=false it may return the previous snapshot immediately instead of blocking - so do NOT use this return value to judge progress, and do NOT treat a repeated seq as "nothing happened". ' +
+      'IMPORTANT: builds up to 2026-11-20 15:34:59 returned the previous snapshot immediately while awaiting=false (stale seq); build 2026-11-23 14:53:57+ blocks until a NEW awaiting=true prompt (or timeout, then returns the current snapshot). Either way do NOT use this return value to judge progress: use control_state or control_actions (fresh), and control_prompt for a non-blocking snapshot. ' +
       'Judge the real state/progress with control_state or control_actions (both are fresh); use control_prompt for a non-blocking snapshot. This is only the "wait for my next decision" primitive (seq is the prompt sequence, pass it back to control_act/control_act_id).',
     inputSchema: {
       type: 'object',
