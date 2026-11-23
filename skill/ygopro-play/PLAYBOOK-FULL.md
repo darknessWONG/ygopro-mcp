@@ -254,14 +254,22 @@ YGOPro 客户端（带控制层的构建，gframe/control*.cpp）
 
 ```
 loop:
-  p = control_wait_prompt(since=lastSeq, timeout_ms=25000)   # 阻塞等
-  if !p.awaiting: continue
-  a = control_actions()
-  if a.awaiting==false or a.actions.length==0: continue       # 不要动作
+  p = control_wait_prompt(since=lastSeq, timeout_ms=25000)   # 只为"等下一个待答窗口"
+  a = control_actions()                                       # 新鲜：用它判断 awaiting/seq/候选
+  if !a.awaiting or a.actions.length==0: continue              # 不要动作
   选 id（按 kind 语义，见下表）
   control_act_id(id)
-  lastSeq = a.seq
+  lastSeq = a.seq                                             # 用 actions 的 seq（新鲜）
 ```
+
+**`control_wait_prompt` 语义（BUG-2，必读）**：
+- **设计语义**：阻塞到"新的且 `awaiting=true`"的 prompt；超时返回当前最新快照。
+- **当前实现 bug**：`awaiting=false` 时会**立刻返回旧快照**（`seq` 重复、字段旧），不能用来判断进度。**修好后也建议按下面的纪律做**。
+- **正确做法**：
+  - 判断进度/当前状态 → `control_state` / `control_actions`（新鲜）；
+  - 想轮询看看 → `control_prompt`（非阻塞）；
+  - `wait_prompt` 只当"停下来等下一个决策点"，**拿到返回值后仍要用 `control_actions` 核对 seq/kind 再动作**；
+  - 永远不要用 `wait_prompt` 的旧快照判断"链推进到哪/对手做了没有"；回动作的 seq 用 `control_actions.seq`。
 
 **kind → 选择语义**（完整表见 `MCP-INTERFACE.md` §5；这里给决策要点）：
 
@@ -393,6 +401,7 @@ control_act({ seq: <当前 seq>, hex: "000201" })
 | **对手静默**（回合不动） | `winPlayer<0 && !awaiting && !sidePending && !tpPending` 且 `lastProgress` >150s（`-SilentAbortSec`） | 存证（state/net/截图）→ `/leave` 重排 | `silent duel for Ns (turn=.. curMsg=.. timeLeft=..)`；`NOPROMPT` |
 | **对手挂机但有时间** | `timeLeft<=5` 且 idle >300s | `control_surrender` 结束本场再重排 | `opponent idle for Ns` |
 | **连接断开** | `/net.state=="disconnected"`；`/net.closeReason` ∈ `eof/error/stop/exit` | 中止本场、重排；可先试 `/join` 同房重连（有 journal 时） | `connection lost ... closeReason=.. sinceStoc=..`；客户端 `NET disconnected reason=..` |
+| **应答后服务端静默 → 断线（BUG-1，外部断线）** | **应答已发出**（`SEND RESPONSE ... i=1` / `UI action ... verified`）后**无任何 STOC**、probe 连续超时（`fails=1..5`）、最终 `NET disconnected reason=error`；`match.games` 可能为空 | **外部断线（D-DISCONNECT，服务端/网络侧），不是自己操作问题**；整场可能作废 → `control_leave`/杀客户端后重排即可；复现第 2 次按 `PITFALLS-2026-11.md` 取证 | `NET probe timeout fails=..`、`NET silence diag since=..`、`NET disconnected reason=error`、`match.games` 空 |
 | **AKF 被踢前兆** | `/chat` 出现 `afk/倒计时/警告/将视为/超时` 等红字（服务端 90s 前警告） | 立刻处理当前 prompt；无动作可做 → surrender 干净结束 | `CHAT-WARN detected` |
 | **stale room** | `get-room` 返回的 password 与上次相同（`stale:true`） | 等 20s 重排 | `stale room; wait 20s` |
 | **MC API 超时** | 10 分钟+ 长轮询无房 / `match long-poll timeout` / `fetch failed` | 继续等/暂停；夜间队列空属正常；8 次失败可 pause 5–10 分钟 | `MC API unreachable (8 fails) -> pause 300s` |
@@ -406,6 +415,25 @@ control_act({ seq: <当前 seq>, hex: "000201" })
 | **`cancel=1` 无效** | 以为能取消排队却仍在等 | 取消 = abort 当前请求；不要用 `cancel=1` | —（见 `match-queue-research.md`） |
 | **fetch headersTimeout** | Node fetch 报 `UND_ERR_HEADERS_TIMEOUT`/`Headers Timeout` | 长轮询不要用默认 300s？用脚本自带超时；重试即可 | `HeadersTimeoutError` |
 | **YGO_TP/side 卡住** | LAN 测试设置 `YGO_TP`/`YGO_SIDE_AUTO` 后仍等 prompt | 确认客户端版本支持；检查 `/prompt.tpPending`/`sidePending` | `TP choice res=`、`SIDE ok clicked` |
+
+---
+
+### 3.13 打牌纪律 / 时间预算（必须遵守，否则 TIMEOUT 判负）
+
+**背景（真实）**：MC 排位 Game1 因 `reason=3 TIMEOUT` 判负——240 秒回合时钟被"每步查卡、翻文档、反复全量读状态"耗尽。客户端不慢，是**决策节奏**问题。
+
+**预算模型**：MC 回合时钟约 **240s**；每次工具往返 **3–10s** → **一回合大约只有 30 次调用**的硬预算。把它当硬预算：**先保证不超时，再谈赢**。
+
+**纪律**：
+1. **开打前**按卡组文档把本回合展开线想好；**中途不查卡、不查文档**。
+2. 只对**没见过的卡**现查，且**一次批量查完**（`card.py A B C`），不要边打边查。
+3. **每回合开头读一次完整 `control_state`**；之后只在 `awaiting` 时「取 `control_actions` → 发动作」，不要反复全量读 `/state`。
+4. **机械步骤一次连续做完**：召唤 → 摆位 → 表示形式 → 攻击宣言，别每步停下来思考。
+5. **换备阶段同理**：`sidePending` 出现时先把计划想好，**一次性做完**；`side_ok` 一按就定。
+6. 判进度用 `control_actions`（新鲜），不要用 `control_wait_prompt` 旧快照（§3.7 BUG-2）。
+7. 如果这回合明显打不完：先做能确定收益的动作、及时 `to_ep`/结束战阶，别卡在"最优解"上超时。
+
+**自查**：回合结束看 `/state.timeLeft`（或 `/net.timeLeft`）；若一个回合用了 >20 次工具调用，说明节奏有问题，下一回合收紧。
 
 ---
 
@@ -484,7 +512,7 @@ control_act({ seq: <当前 seq>, hex: "000201" })
 |---|---|
 | 基础 | `seq` `curMsg` `turn` `awaiting` `awaitingSinceMs`（等待已持续毫秒；>45s 有 `PROMPT idle warning`，60s 自动兜底） |
 | 可召唤计数 | `summonable` `spsummonable` `msetable` `ssetable` `reposable` `activatable` `attackable` `chains` `chainForced` `lastChain` |
-| 选卡 | `selectMin` `selectMax` `selectCancelable` `selectableCount` `selectableCards`（每项含 `i/code/atk/def/lv/position/loc/seqNo`）；**`isAttackTarget`**（`15:18:21` 起：战斗目标窗=true，必须用 `select_card` 按 `atk/def` 选） |
+| 选卡 | `selectMin` `selectMax` `selectCancelable` `selectableCount` `selectableCards`（每项含 `i/code/atk/def/lv/position/loc/seqNo`）。**`i` 是列表下标（只给 `control_actions` id 用）；响应字节必须用 `seqNo`：`hex="01"+seqNo hex`**（如列表第 4 个、`seqNo=9` → `hex="0109"`）。首选 `control_actions` 的 `kind:"select_card"` id，别手拼 hex；**`isAttackTarget`**（`15:18:21` 起：战斗目标窗=true，必须用 `select_card` 按 `atk/def` 选） |
 | 宣言 | `announceNumberValues`（仅 `MSG_ANNOUNCE_NUMBER(143)`：可用数值列表，`announce_number` 的候选；响应=数值本身） |
 | 阶段 | `canBp` `canEp` |
 | 候选卡 | `summonableCards` `spsummonableCards` `msetableCards` `ssetableCards` `activatableCards` `attackableCards` |

@@ -51,13 +51,25 @@ description: 用 MCP 控制层真实操作 YGOPro 客户端打牌（MC 线上排
 
 ```
 while not state.match.over:
-  s = control_state()
+  s = control_state()               # 每回合开头读一次完整局面；之后不要反复全量读
   if not s.started: 处理开局/换备（表 1）
-  p = control_prompt()              # 或 control_wait_prompt(since=上次seq, timeout_ms=15000)
+  p = control_prompt()              # 非阻塞快照；wait_prompt 只用来"等下一个待答窗口"
   if not p.awaiting: sleep 1–2s; continue
-  a = control_actions()             # [{id, kind, label, ...}]
-  control_act_id(选中的 id, seq=p.seq)
+  a = control_actions()             # 新鲜：[{id, kind, label, seq}]；判进度用它
+  control_act_id(选中的 id, seq=a.seq)
 ```
+
+**`control_wait_prompt` 语义（BUG-2）**：设计语义=阻塞到新的 `awaiting=true`；旧版 bug=`awaiting=false` 时立刻返回**旧快照**。所以：**判进度用 `control_state`/`control_actions`，轮询用 `control_prompt`，`wait_prompt` 只当"停下来等"**；回动作的 `seq` 用 `actions.seq`。
+
+**选卡字节（BUG-3）**：`/prompt.selectableCards[].i` 是**列表下标**（只给 actions id 用）；**响应 hex 必须用 `seqNo`**：`hex="01"+seqNo hex`（`seqNo=9` → `"0109"`）。**首选 `control_actions` 的 `kind:"select_card"` id**，别手拼 hex。
+
+**打牌纪律 / 时间预算（必读，实测 TIMEOUT 判负）**：MC 回合时钟约 **240s**，每次工具往返 3–10s → **一回合约 30 次调用的硬预算**。
+1. 开打前按卡组文档想好本回合展开线，**中途不查卡/不查文档**；
+2. 只对没见过的卡现查，且**一次批量查完**；
+3. 每回合开头读**一次** `control_state`，之后只在 `awaiting` 时「`control_actions` → 动作」，不要反复全量读；
+4. 机械步骤（召唤→摆位→表示形式→攻击宣言）**一次连续做完**，别每步停下来思考；
+5. 换备（`sidePending`）先想好再**一次性做完**（`side_ok` 一按就定）；
+6. 打不完就及时 `to_ep`/结束战阶，**先保证不超时**。
 
 选动作：`yesno` 按收益；`option` 按效果；`card/place` 用 prompt 里的 `selectableCards/placeOptions`；`chain` 有反制才链；`position` 按场面；`idlecmd` 展开/结束；`side_ok` 见第 2 节第 9 步；`tp` 必须快。
 
@@ -86,6 +98,8 @@ while not state.match.over:
 | 进房 35s 没人来 | `control_lobby.playerCount<2` | 离开重排 |
 | 对手回合长时间无包 | `turnPlayerLocal!=0` 且 `net.sinceLastStoc` 增长、`timeLeft` 冻结 | 180s 后离开重排 |
 | `net.closeReason=="eof"` | 服务端主动断 | 本场作废重排；若刚 `tpPending` 过 → 就是 TP 超时 |
+| **应答已发出后无任何 STOC + probe 连续超时 + `NET disconnected reason=error`** | **外部断线**（服务端/网络侧；不是自己操作问题）；`match.games` 可能为空 | `control_leave`/杀客户端后重排；第 2 次复现按 `PITFALLS-2026-11.md` 取证 |
+| **回合被 `reason=3 TIMEOUT` 判负** | 240s 回合时钟被"查卡/翻文档/反复全量读"耗尽 | 按"打牌纪律"：先规划、机械步骤一次做完、每回合只读一次 `control_state`、快赢不下先保不超时 |
 | 怀疑掉线（长回合/对手长考） | 每 15–30s `control_net` | `alive=false` 或 `state=confirmed_dead/disconnected` → 中止重排；`idle-no-packet`=被动静默判死、`disconnected`=socket 断；`probe_failed`/`fails` 增长不算断线 |
 | 看起来没动静、但不像掉线 | `/net.stallMs` / `oppClockFresh` / `oppTimeLeft` | `stallMs>120000 && oppClockFresh=false` = **对方客户端/服务端卡住** → **`control_leave` 离桌重排（优先于 surrender）**；`oppClockFresh=true` 是对手长考，继续等（日志 `NET STALL`，`YGO_STALL_WARN_MS` 默认 120000；判读以 `oppClockFresh` 为准） |
 | `eof` 前有 `PROMPT publish`、~88s 无 `SEND RESPONSE` | 未答 AFK（MC 排位 ~90s；LAN srvpro 是 180s TIMEOUT） | `10:25:14` 版 guard 60s 自动兜底；`/prompt.awaitingSinceMs` 看等待长度；LLM 60s 内必答 |

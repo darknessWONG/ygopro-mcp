@@ -223,7 +223,9 @@ const TOOLS = [
   },
   {
     name: 'control_wait_prompt',
-    description: 'Long-poll until it is this client\'s turn to respond. Returns the prompt: seq (pass it back to control_act), curMsg (what kind of decision), and candidate counters. This is the main agent loop primitive.',
+    description: 'Long-poll for the NEXT prompt that needs an answer (GET /wait_prompt?since&timeout_ms). Intended semantics: block until a NEW prompt with awaiting=true arrives (or timeout, then return the current latest snapshot). ' +
+      'IMPORTANT (currently implemented bug on older builds): while awaiting=false it may return the previous snapshot immediately instead of blocking - so do NOT use this return value to judge progress, and do NOT treat a repeated seq as "nothing happened". ' +
+      'Judge the real state/progress with control_state or control_actions (both are fresh); use control_prompt for a non-blocking snapshot. This is only the "wait for my next decision" primitive (seq is the prompt sequence, pass it back to control_act/control_act_id).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -235,7 +237,9 @@ const TOOLS = [
   },
   {
     name: 'control_act',
-    description: 'Submit a response for the prompt with the given seq. Use either i (int32 encoded response, e.g. idle (index<<16)|cmd, -1 for chain decline) or hex (raw response bytes, e.g. card selection "0100" = select 1 card at index 0).',
+    description: 'Submit a response for the prompt with the given seq. Use i (int32, e.g. idle (index<<16)|cmd, -1 for chain decline) or hex (raw bytes). ' +
+      'CARD SELECTION BYTES USE THE CARD seqNo, NOT THE LIST INDEX: prompt.selectableCards[].i is only the list position used by control_actions ids; the response must be hex = "01" + seqNo in hex (e.g. selectableCards[3] with seqNo=9 -> hex="0109"). ' +
+      'Prefer control_actions -> kind:"select_card" (one action per candidate) + control_act_id so you never hand-encode this. Example: hex:"0100" selects 1 card whose seqNo is 0.',
     inputSchema: {
       type: 'object',
       properties: {

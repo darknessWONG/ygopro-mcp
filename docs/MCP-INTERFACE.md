@@ -30,17 +30,17 @@
    env     = { CONTROL_URL: "http://127.0.0.1:7788" }   // 客机用 7789
 
 ③ 循环：
-   r = control_wait_prompt({since: lastSeq})     // 长轮询，拿到本轮 prompt
-   a = control_actions()                          // 本 prompt 的语义候选（id+kind+label）
+   r = control_wait_prompt({since: lastSeq})     // 只为"等下一个待答窗口"；不要用它判断进度（见 §5.9）
+   a = control_actions()                          // 本 prompt 的语义候选（id+kind+label），新鲜
    control_act_id({id: <你选中的候选 id>})         // 提交（默认经 UI 点击执行）
-   lastSeq = r.seq
+   lastSeq = a.seq                                // 用 actions 的 seq（新鲜），不要用 wait 的旧快照
 
 ④ 对局走了、赢家出现后读 control_state().winPlayer / winReasonName 收尾
 ```
 
 **三条铁律**
 
-1. **动作必须针对当前 `seq`**：`control_wait_prompt` 返回新 `seq` 才做决策；`control_act` 用旧 seq 会被拒（`stale seq`）。
+1. **动作必须针对当前 `seq`**：`control_wait_prompt` 返回新 `seq` 才做决策；`control_act` 用旧 seq 会被拒（`stale seq`）。**判断进度用 `control_state`/`control_actions`（新鲜），不要信 `wait_prompt` 返回的旧快照**（§5.9）。
 2. **`/state.started` 与 `/health.started` 不是一回事**（§4.1、§10 有坑说明）。
 3. **UI 路径是默认、直连是兜底**：看到 `UI fallback` 是正常现象，不是故障。
 
@@ -111,7 +111,7 @@
 |---|---|---|---|---|
 | 1 | `control_health` | 存活探活 | — | `GET /health` |
 | 2 | `control_state` | 完整局面（§4.1） | — | `GET /state` |
-| 3 | `control_wait_prompt` | **主循环原语**：长轮询等新 prompt | `since`(number，上一次的 seq，首次 0)、`timeout_ms`(默认 30000) | `GET /wait_prompt?since&timeout_ms` |
+| 3 | `control_wait_prompt` | **只为"等下一个待答窗口"**（正确语义：阻塞到新的 `awaiting=true`；超时返回最新快照）。**旧版 bug：`awaiting=false` 会立刻返回旧快照，不能用来判断进度**；判进度用 `control_state`/`control_actions`，轮询用 `control_prompt`（§5.9） | `since`(number，上一次的 seq，首次 0)、`timeout_ms`(默认 30000) | `GET /wait_prompt?since&timeout_ms` |
 | 4 | `control_actions` | 当前 prompt 的语义候选 | — | `GET /actions` |
 | 5 | `control_act_id` | 按 id 执行候选（默认 UI 路径） | `id`(number) | `GET /act_id?id=` |
 | 6 | `control_act` | 直接提交原始响应（调试/兜底） | `seq`(number)、`i`(int32) 或 `hex`(bytes hex) | `POST /act?seq&i\|hex` |
@@ -316,7 +316,7 @@ body = PromptJson(g_shared);
 | `chainForced` | 连锁是否被迫（`canDecline` 的来源） |
 | `lastChain` | 是否处于连锁中 |
 | `selectMin` / `selectMax` / `selectCancelable` / `selectableCount` | 选卡 min/max、可否取消、可选张数 |
-| `selectableCards[]` | 候选卡 `{i,code,atk,def,lv,position,loc,seqNo,...}`（`15:18:21` 起含 `position`）；`kind:"select_card"` 的 label 从这里来 |
+| `selectableCards[]` | 候选卡 `{i,code,atk,def,lv,position,loc,seqNo,...}`（`15:18:21` 起含 `position`）。**`i` 是列表下标（只给 `control_actions` 的 id 用）；响应字节必须用 `seqNo`（= select_seq）：`hex="01"+seqNo hex`**（`selectableCards[3]` 且 `seqNo=9` → `hex="0109"`）。首选 `control_actions` 的 `kind:"select_card"` id，不要手拼 hex |
 | `isAttackTarget` | **`15:18:21` 起**：`MSG_SELECT_CARD && selectMax==1 && 战斗阶段` 时 `true`——这是"攻击目标窗"，必须用 `select_card` 按 `atk/def` 选，不要 `select_auto`/`id=0` |
 | `awaitingSinceMs` | **仅 `awaiting=true` 时出现**：等待已持续毫秒；>45s 客户端打 `PROMPT idle warning`，默认 60s 自动兜底（`YGO_PROMPT_AUTO_DEFAULT_MS`，见 §8.1） |
 | `announceNumberValues` | **仅 `MSG_ANNOUNCE_NUMBER(143)` 时出现**：可用数值列表（int32）；`/actions` 为每个值给一条 `kind:"announce_number"`，选中后响应 = **数值本身**（不是下标） |
@@ -600,6 +600,24 @@ LLM 想回答"**我赢了吗/为什么赢/大比分多少/比赛结束没**"时�
 **返回**：`{"ok":true,"queued":true}`（客户端会关对局/回主菜单；随后用 `control_state`/`control_net` 确认 `inDuel=false`、`joined=false`，再重新排队）。
 
 **注意**：`leave` 虽然立即生效，但服务端可能仍把本场记为你的离场（与 surrender 的结算不同）；排位连续跑可用它跳过卡死桌、重排下一场。
+
+### 5.9 `control_wait_prompt` 的正确语义（BUG-2）
+
+**设计语义（修好后）**：`wait_prompt(since=上一个 seq)` 应**阻塞到"新的且 `awaiting=true`"的 prompt**；若超时则返回当前最新快照。它只用来"等下一个要你回答的窗口"。
+
+**当前实现 bug（≤ 现版本）**：`awaiting=false`（对手回合/连锁在对方）时**不会阻塞**，而是**立刻返回上一份旧快照**。具体表现：`r.seq` 重复、`chainDepth` 等字段是旧的，而同一秒 `/state` 已经推进（`chainDepth` 1→2→3、`awaiting=true`）。
+
+**正确用法（无论 bug 是否修好都适用）**：
+| 目的 | 用什么 |
+|---|---|
+| **判断进度 / 当前真实状态** | `control_state` 或 `control_actions`（**新鲜**；`control_actions.seq` 才是该回的 seq） |
+| 想"轮询看看" | `control_prompt`（**非阻塞**快照） |
+| 想"等下一个决策点" | `control_wait_prompt(since=已处理的 seq, timeout_ms)`；**拿到返回值后仍要用 `control_actions` 核对 seq/kind 再动作**，不要拿 wait 的旧快照当进度 |
+| 不要做 | 用 `wait_prompt` 的返回判断"链推进到哪了/对手做了没有"；把重复 `seq` 当"没变化" |
+
+**回动作的 seq**：用 `control_actions` 返回的 `seq`（与 `control_prompt` 一致），不要用旧快照的 seq；`control_act` 用旧 seq 会被拒（`stale seq`）。
+
+**超时**：`timeout_ms` 到点返回当前最新快照（可能仍 `awaiting=false`），这是正常的"没轮到你"，不是错误。
 
 ---
 

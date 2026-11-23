@@ -73,6 +73,9 @@ GET /act_id?id=1     # 后攻（index=2）
 ```
 
 - `awaiting=false` 表示**现在不需要你动作**（通常是对手回合或连锁在对手那边）——不要乱发 `/act_id`。
+- **`wait_prompt` 只用来"等下一个待答窗口"**：旧版在 `awaiting=false` 时会立刻返回**旧快照**（不能用来判断进度）；判进度用 `/state` 或 `/actions`（新鲜），轮询用 `/prompt`（非阻塞）；回动作的 `seq` 用 `/actions.seq`。
+- **选卡响应字节用 `seqNo`，不是列表下标**：`/prompt.selectableCards[].i` 只是列表下标（给 `/actions` 的 id 用）；`hex = "01" + seqNo hex`（如 `seqNo=9` → `hex="0109"`）。首选 `/actions` 的 `kind:"select_card"` id，不要手拼。
+- **回合时钟约 240s，每次工具往返 3–10s → 一回合约 30 次调用**：先规划好再动手，机械步骤（召唤/摆位/表示形式/攻击）一次做完；每回合开头读一次 `/state`，之后只 `/actions`→`/act_id`。
 - 看到 `/prompt.tpPending` → 走第 4 节；看到 `/prompt.sidePending` → 走第 6 节。
 - 若 `awaiting=true` 且 `/actions` 为空持续 >30s：先查 `/ui.windowsVisible` 是否有阻塞窗（`wQuery/wCardSelect/...`），再看 `/state.pipeline` 与客户端日志；这是客户端 bug，不是"该等"。
 
@@ -151,6 +154,8 @@ GET /act_id?id=0             # = 点真实 btnSideOK / MCP: control_side_done
 | 对手回合长时间无包（`sinceLastStoc` 持续增长、`timeLeft` 冻结、`awaiting=false`） | 判"对手失联/空等"：静默 2–5 分钟后 `/leave` + 重排（不要一直等） |
 | 空房（进房后 **35 秒**内没有第二个人进来，`/lobby.playerCount<2`） | 立即 `/leave` + 重排；不要傻等（`ranked-loop.ps1 -EmptyRoomSec 35`，默认 35s） |
 | `connection lost` / `/net.state=="disconnected"` | 中止本场、重排（可选：`/join` 同房重连，有 journal 时能回同一局） |
+| **应答后无任何 STOC + probe 连续超时 + `NET disconnected reason=error`** | **外部断线**（服务端/网络侧，不是自己操作问题）：整场可能作废（`match.games` 空）→ `control_leave`/杀客户端后重排即可；第 2 次复现按 `PITFALLS-2026-11.md` 取证 |
+| **Game 因 `reason=3 TIMEOUT` 判负** | 回合时钟 240s 被"查卡/翻文档/反复全量读"耗尽——按"打牌纪律"执行：先规划、机械步骤一次做完、每回合只读一次 `/state` |
 | 准备/开始失败 | 重试 ready（每 1–2s）、start（每 2–3s），最多 ~30 次；仍失败则离开重排并抓 `/lobby`、`/state.deckError` |
 | 打完发现输多赢少 | 那是策略问题（policy 偏保守），不是流程问题 |
 
