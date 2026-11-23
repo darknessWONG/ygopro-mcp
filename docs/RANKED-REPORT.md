@@ -340,4 +340,9 @@
    - 现象：应答已发出（`SEND RESPONSE ... i=1`）后服务端无任何 STOC、probe 连续超时（`fails=1..5`）、最终 `NET disconnected reason=error`；`match.games` 为空 → 整场作废。
    - 归类：**服务端/网络侧外部断线，不是客户端逻辑 bug**（客户端按规范检测上报）；1 次不足以定性，第 2 次按 `PITFALLS-2026-11.md` 取证。
 5. **Game1 `reason=3 TIMEOUT` 判负（节奏问题，已写入 skill）**：240s 回合时钟被"每步查卡/翻文档/反复全量读"耗尽；文档已加"打牌纪律 / 时间预算"（一回合约 30 次调用硬预算）。
-- **验证**：待 bot-scout（PASS 后本节补证据，`ranked/logs/`）。
+- **验证（bot-scout `ranked/logs/wait-prompt-ctrlmine-validation.md`，正式 build `6B7DD189`）4 组 PASS**：
+  1. **BUG-2 wait_prompt**：旧 build `7C7FB684` 对照——`awaiting=false` 时 **2ms 返回旧快照**（`staleImmediate=true`、seq 不变，缺陷复现）；新 build `since=3, awaiting=false` → **阻塞 12895ms**，返回 `seq=4, awaiting=true, curMsg=11`、`staleImmediate=false`，`chainDepth` 与 `/state` 一致；已有 prompt 时 **2ms 快速返回**（`fastPath=true`）。证据：`wait-prompt-ctrlmine-20261123-151154/`（before 对照 `-151700/`）。
+  2. **BUG-3 `ctrl/isMine/resp`**：`myHand ctrl=0 isMine=true`、`myMonsters ctrl=0 isMine=true`、`oppMonsters ctrl=1 isMine=false`、`name` 可读；战斗目标窗 2 张对手卡 `ctrl=1 isMine=false resp=0/1 == seqNo`（`ctrlMatchesIsMine=true` 全部成立）；旧 build 无这些字段且对手卡 `ctrl` 恒 0。
+  3. **`resp` → hex 提交**：`/act?seq=8&hex=0100`（`resp=0` 的铠蜥蜴）→ `SEND RESPONSE curMsg=15` → `firstid=110(MSG_BATTLE)`，guest LP `8000→7500`（-500 = 2000 ATK − 1500 DEF），host 攻击怪存活——证明选中的是 `resp` 对应的卡，不是列表下标。
+  4. **回归**：`summon → place → to_ep → to_bp → attack` 全 `/act_id` 正常，`retry=0`、无 RETRY/eof/disconnect，`inDuel` 全程 true、turn 正常递增。
+- **备注**：`mcp-server.mjs` 里 `control_wait_prompt` 的描述已同步为"≤15:34:59 旧行为 / 14:53:57+ 已修"（lead commit `16e7553`）；**运行中的 MCP server 需重启才会加载新描述**。
