@@ -35,7 +35,7 @@ description: 用 MCP 控制层真实操作 YGOPro 客户端打牌（MC 线上排
 
 | # | 阶段 | 调用 | 判定成功（字段） | 失败/重试 |
 |---|---|---|---|---|
-| 1 | 排队拿房（仅线上） | `node $ROOT\bridge\get-room.mjs` | 拿到 `{address,port,password}` | 长轮询超时/409 正常；30–60s 重试，8 次后停 5 分钟 |
+| 1 | 排队拿房（仅线上） | `node $ROOT\bridge\get-room.mjs` | 拿到 `{address,port,password}` | 长轮询超时正常；**409 不正常**——见 §5（= 同账号并发）；30–60s 重试，8 次后停 5 分钟 |
 | 2 | 进房 | `control_join(address,port,pass)` | `/net.connected && /net.joined` | 2s 重试；3 次失败回第 1 步 |
 | 3 | 选卡组 | `control_deck(name)` | `control_lobby.deckMain>0` | 卡组不存在 → 列 `$ROOT\mycard-bot\game\deck\*.ydk` |
 | 4 | 准备 | `control_ready()` | `control_lobby.ready[mySeat]==1` | 1–2s 重试 |
@@ -63,13 +63,20 @@ while not state.match.over:
 
 **选卡字节（BUG-3，`14:53:57` 已修并加 `resp`）**：`/prompt.selectableCards[].i` 是**列表下标**（只给 actions id 用）；**响应 hex 用 `resp`（= `seqNo`）**：`hex="01"+resp hex`（`resp=9` → `"0109"`）。**首选 `control_actions` 的 `kind:"select_card"` id**，别手拼 hex；`ctrl/isMine` 字段也已修正。
 
-**打牌纪律 / 时间预算（必读，实测 TIMEOUT 判负）**：MC 回合时钟约 **240s**，每次工具往返 3–10s → **一回合约 30 次调用的硬预算**。
+**打牌纪律 / 时间预算（必读，实测 TIMEOUT 判负）**：MC 回合时钟约 **240s**。
+**⚠️ 单次工具往返实测 10–20s**（不是 3–10s；`control_actions` + `control_act_id` 一对就 20–40s）→ **一回合约 12–14 次调用的硬预算**（按 30 次规划会直接超时钟；2026-11-24 实测两次 TIMEOUT 判负就是这么来的）。
+
+**「MCP 好慢」的真相（2026-11-25 实测）**：MCP 传输本身 **2–4ms**、控制层 HTTP **13–54ms**；慢的是 ①**LLM 每次工具调用的推理往返 10–20s**（占绝大部分）②**`control_wait_prompt` 按设计阻塞**——要等到"新的、`awaiting=true`"的 prompt 才返回（idle 时 `timeout=5000` 就等满 ~5006ms），**这是"等下一次询问"，不是卡死**。所以：等决策点用 `wait_prompt(timeout_ms=10000~30000)`，查现状用 `control_prompt`（2–3ms、~700B），判掉线用 `control_net`（别看 `wait_prompt` 耗时）；`timeout_ms` 别超 MCP 客户端的工具超时（DSH profile `toolCallTimeoutMs: 180000`）。详见 `MCP-INTERFACE.md` §5.11。
 1. 开打前按卡组文档想好本回合展开线，**中途不查卡/不查文档**；
 2. 只对没见过的卡现查，且**一次批量查完**；
 3. 每回合开头读**一次** `control_state`，之后只在 `awaiting` 时「`control_actions` → 动作」，不要反复全量读；
 4. 机械步骤（召唤→摆位→表示形式→攻击宣言）**一次连续做完**，别每步停下来思考；
-5. 换备（`sidePending`）先想好再**一次性做完**（`side_ok` 一按就定）；
-6. 打不完就及时 `to_ep`/结束战阶，**先保证不超时**。
+5. 换备（`sidePending`）先想好再**一次性做完**（`side_ok` 一按就定）；**换备前先核对 main 里实际张数**，否则 `side_move` 会被拒
+6. 打不完就及时 `to_ep`/结束战阶，**先保证不超时**；
+7. **表示形式默认选攻击**：选 `defense position` 实测**不生效**（`seq` 原地不动、prompt 反复重发，白烧时钟）。ATK<2000 的非打手本该死守，目前只能先按攻击处理并接受风险；
+8. **摆位：EMZ 的容量规则** —— 额外怪兽区每家只有 1 个；**非连接（非 Link）怪物只能占用其中 1 个**（Link 怪可以指到对面的 EMZ）。
+   → 所以「优先 `seq=5|6`」只在 **EMZ 空着**时成立。第二只额外怪会**只能落主区 `seq=0..4`**。
+   具体"哪只怪必须进 EMZ 才有价值"是**卡组策略，不在这里** —— 见卡组文档（本卡组的 `停止下注` 就是典型）。
 
 选动作：`yesno` 按收益；`option` 按效果；`card/place` 用 prompt 里的 `selectableCards/placeOptions`；`chain` 有反制才链；`position` 按场面；`idlecmd` 展开/结束；`side_ok` 见第 2 节第 9 步；`tp` 必须快。
 
@@ -103,6 +110,11 @@ while not state.match.over:
 | 怀疑掉线（长回合/对手长考） | 每 15–30s `control_net` | `alive=false` 或 `state=confirmed_dead/disconnected` → 中止重排；`idle-no-packet`=被动静默判死、`disconnected`=socket 断；`probe_failed`/`fails` 增长不算断线 |
 | 看起来没动静、但不像掉线 | `/net.stallMs` / `oppClockFresh` / `oppTimeLeft` | `stallMs>120000 && oppClockFresh=false` = **对方客户端/服务端卡住** → **`control_leave` 离桌重排（优先于 surrender）**；`oppClockFresh=true` 是对手长考，继续等（日志 `NET STALL`，`YGO_STALL_WARN_MS` 默认 120000；判读以 `oppClockFresh` 为准） |
 | `eof` 前有 `PROMPT publish`、~88s 无 `SEND RESPONSE` | 未答 AFK（MC 排位 ~90s；LAN srvpro 是 180s TIMEOUT） | `10:25:14` 版 guard 60s 自动兜底；`/prompt.awaitingSinceMs` 看等待长度；LLM 60s 内必答 |
+| **排队突然连续 `409`**（之前一直是正常长轮询，某刻起全是 409） | **同账号并发 match 请求** —— 起了两个 `queue-loop`，第二个把第一个顶成 409。**不是服务端故障、不是空池** | 查 `Get-Process node` 的 `queue-loop` 命令行，**只留 1 个**；多进程还会让房间 JSON 落在别人 stdout 里拿不到 |
+| **排队 `/ygopro/match` 稳定 `400`**（body 空、`srv:nginx`、退避 5 分钟后单发仍 400） | **服务端侧拒斥**。已排除：凭证（`authUser` 200）、限流、burst、我们代码（Basic 头 base64 解码回原文一致） | **停排别空烧**，把首次出现时间/次数交给维护者。诊断脚本 `$ROOT\bridge\probe2.mjs` / `probe3.mjs` |
+| **`control_join` 连上 ~80ms 就 `STOC_ERROR_MSG code=0x00090000`（`errorCode:589824`）、`joined:false`** | **房间已失效/被回收**（MC 房间是一次性的，配对后几十秒内不进就死）。不是密码错、不是超时 | **立刻重排，别反复 join 同一个房**；根因多半是"配对→进房"之间有人/B 的往返延迟 → 见 §7.5 |
+| **`/state.errorMsg:1` + `errorCode:589824` 在整场健康对局里一直挂着**（`net.state:"healthy"`、prompt 正常） | `errorCode/errorMsg` **粘滞**（进房失败后不清），**不代表当前有错误** | 判当前是否出错看 `awaiting`/`prompt`/`net.state`，**别看 `errorCode`**；只有它**刚变化**时才有诊断意义 |
+| **`awaiting:false` 时 `control_actions` 仍返回上一轮的 `chainCandidates`** | 动作列表残留（如"XX可以连锁"），此时发动作无效 | **只在 `awaiting:true` 时发动作**；`awaiting:false` 一律等 |
 | 卡 `STOC_SELECT_TP` | `prompt.tpPending` | 立刻 `control_act_id`（13s 内） |
 | 卡 `STOC_CHANGE_SIDE` | `state.side.pending` | 两侧 `control_side_done` |
 | `side_ok` 报 `counts must match` | 换备不守恒 | 换回等量再 done |
@@ -138,7 +150,45 @@ powershell -NoProfile -ExecutionPolicy Bypass -File bridge\ranked-loop.ps1 `
 
 说清楚：第几局、谁赢、原因（翻译）、大比分、是否结束；有截图就配图；输赢如实说；失败给判定依据（字段/日志行）。
 
+## 7.5 ★★★ 多 agent / subagent 打排位（实测有效，但有铁律）
+
+> 背景：主会话上下文一大，每次工具往返就慢（实测 **10–20s/次**），一回合 12–14 次调用就把 240s 时钟吃光 → 必然 TIMEOUT。
+> **解法：用上下文干净的子 agent（subagent/teammate）去打。** 实测同一个模型，新会话从开工到开打只要几分钟，而且没超时。
+
+### 铁律 1：**配对和进房必须是同一个执行者**
+实测：主会话排到房（17:31:25）→ 把房间 JSON 转给子 agent → 40–50 秒后才 join →
+**两次都被 `STOC_ERROR_MSG code=0x00090000`（`errorCode:589824`）拒**，同时 server chat 显示「主机密码不正确 (Unauthorized)」。
+**MC 的房间是一次性的，配对后几十秒内不进去就死。**
+→ **A 排队 B 进房必然失败**。要么让同一个 agent 全包，要么用下面的 autojoin。
+
+### 铁律 2：**账号任何时刻只能有 1 个队列进程**
+两个 `queue-loop` 并发 → 服务端返回 **`status=409`**（不是故障、不是空池）。
+而且多进程时房间 JSON 会落在**别人的** stdout 里，你拿不到。
+→ 交接前先查：`Get-Process node`，只留 1 条 `bridge\queue-loop.mjs`。
+
+### 推荐架构：`autojoin` 一条龙（实测一次成功）
+子 agent 写一个 watchdog（如 `bridge\autojoin.mjs`）：
+1. **盯队列日志文件**（把 `queue-loop` 的 stdout 重定向到 `ranked\queue-*.out.log`）
+2. 一旦出现房间 JSON，**在同一次轮询里**完成 `control_join → control_deck → control_ready → control_start`
+3. 实测：`ROOM FOUND → JOINED → deck → ready` 全在 **2 秒内**，**无人工往返**
+
+**配套要点**：
+- 续跑队列时**复用同一个 out 日志文件**，这样 watchdog 不用重启（少一个环节少一个出错点）
+- `queue-loop` 写 stderr、房间 JSON 写 stdout —— 分别重定向到 `.out.log` / `.err.log`，别搞混
+- 读房间 JSON 用 `JSON.parse`，**不要肉眼看** `name` 字段（可能是 GBK 乱码；`address/port/password` 是 ASCII 没问题）
+
+### 分工建议
+| 角色 | 干什么 |
+|---|---|
+| 子 agent（干净上下文） | **排队 + autojoin + 打完整场 + 汇报**（一回合 ≤12–14 次调用） |
+| 主 agent | 不做任何客户端动作（出手慢会超时），只做转述/决策把关/改 skill |
+
+### 汇报要求（子 agent 交给主 agent）
+比分（`control_match` 原文）/ 每局原因 / 对手卡组 / **有没有超时** / **每回合调用次数** / 新 BUG（带字段或日志行）/ **自己的失误（如实，别美化）**
+
+---
+
 ## 8. 更多细节
 
-- **同目录 `PLAYBOOK-FULL.md`**：18 个工具逐个、每阶段返回示例、字段字典、计时表、真实 run、21 行排错表
+- **同目录 `PLAYBOOK-FULL.md`**：20 个工具逐个、每阶段返回示例、字段字典、计时表、真实 run、21 行排错表
 - `$ROOT\bridge\docs\MCP-INTERFACE.md`、`$ROOT\mycard-client\docs\CONTROL-API.md`、`$ROOT\bridge\docs\RANKED-REPORT.md`
