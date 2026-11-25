@@ -201,6 +201,7 @@ const TOOLS = [
   {
     name: 'control_state',
     description: 'Get the full duel state: turn, phase, LP, hand/field/grave/deck counts with card details, pending prompt counters. ' +
+      'Payload is large (about 3.7KB empty, 10-25KB mid-duel) and the transport costs only 15-30ms; the expensive part is the model reading it - read it once per turn and use control_actions/control_prompt (small, 2-3ms) afterwards. ' +
       'The whole Bo3 result is passed through as state.match; for a ready-to-read Chinese summary of the match result use control_match.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
@@ -225,7 +226,8 @@ const TOOLS = [
     name: 'control_wait_prompt',
     description: 'Long-poll for the NEXT prompt that needs an answer (GET /wait_prompt?since&timeout_ms). Intended semantics: block until a NEW prompt with awaiting=true arrives (or timeout, then return the current latest snapshot). ' +
       'IMPORTANT: builds up to 2026-11-20 15:34:59 returned the previous snapshot immediately while awaiting=false (stale seq); build 2026-11-23 14:53:57+ blocks until a NEW awaiting=true prompt (or timeout, then returns the current snapshot). Either way do NOT use this return value to judge progress: use control_state or control_actions (fresh), and control_prompt for a non-blocking snapshot. ' +
-      'Judge the real state/progress with control_state or control_actions (both are fresh); use control_prompt for a non-blocking snapshot. This is only the "wait for my next decision" primitive (seq is the prompt sequence, pass it back to control_act/control_act_id).',
+      'Judge the real state/progress with control_state or control_actions (both are fresh); use control_prompt for a non-blocking snapshot. This is only the "wait for my next decision" primitive (seq is the prompt sequence, pass it back to control_act/control_act_id). ' +
+      'This tool is SLOW BY DESIGN: it stays blocked until a new awaiting prompt appears or timeout_ms expires (measured: timeout=5000 -> ~5006ms when idle; immediately when a prompt is already pending). A long call is not a broken MCP - the transport round-trip is 2-4ms. Keep timeout_ms within the MCP client tool timeout (DSH: toolCallTimeoutMs=180000).',
     inputSchema: {
       type: 'object',
       properties: {

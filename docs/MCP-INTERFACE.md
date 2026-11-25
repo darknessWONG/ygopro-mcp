@@ -626,10 +626,32 @@ LLM 想回答"**我赢了吗/为什么赢/大比分多少/比赛结束没**"时�
 | 约束 | 原因 |
 |---|---|
 | 不要在 `awaiting=false` 时 tight-loop 调 `control_wait_prompt` | `14:53:57+` 会阻塞到下一个待答窗口；重复调用只会白等，不能当轮询用（轮询用 `control_prompt`） |
-| `control_state` 每回合开头读 **1 次**即可 | 返回是**全量** JSON（手牌/场上/墓地/链/缓存等，几十 KB），一次往返 3–10s；之后用 `control_actions`/`control_prompt` 的小返回即可 |
+| `control_state` 每回合开头读 **1 次**即可 | 返回是**全量** JSON（空场 3.7KB，对局中约 10–25KB；传输本身 15–30ms，但**LLM 分析这个 JSON 要 3–10s**）；之后用 `control_actions`/`control_prompt` 的小返回即可 |
 | 判进度看 `control_state`/`control_actions`，不看 `wait_prompt` 返回值 | 后者只代表"最近一次发布"，旧版还会立刻返回旧快照（BUG-2） |
 | 机械步骤（召唤→摆位→表示形式→攻击宣言）连续 `control_act_id`，不要每步再读一次状态 | 每步都读状态是 TIMEOUT 的主要来源（实测 240s 被耗尽判负） |
 | 卡牌资料一次批量查（`card.py A B C`），中途不查 | 同上；卡组文档应在开局前读完 |
+
+### 5.11 延迟模型：为什么有时"MCP 很慢"
+
+**结论先说：MCP 传输本身几乎不耗时；感知到的"慢"来自 ①`control_wait_prompt` 的阻塞语义、②LLM 自己的推理往返、③服务端/对手的节奏。**
+
+实测（2026-11-25，本机空场客户端；`mcp-server.mjs` 常驻进程 + HTTP 控制层）：
+
+| 层 | 实测耗时 | 备注 |
+|---|---|---|
+| MCP stdio 工具往返（`control_actions`/`control_prompt`/`control_net`/`control_state`） | **2–4 ms**（首调用 34ms 冷启动） | 常驻进程，**不会**每次调用重启；这点不慢 |
+| 控制层 HTTP（`/prompt` `/actions` `/net` `/ui`） | 13–22 ms | 本机 loopback |
+| 控制层 HTTP（`/state`） | 13–54 ms（均值 27ms） | 负载大一点，仍毫秒级 |
+| **`control_wait_prompt`** | **0 → timeout**（实测 timeout=5000 → 5006ms 返回） | **按设计阻塞**：等到"新的、`awaiting=true`"的 prompt 才返回；没有待答窗口就一直等到 `timeout_ms`。**这是"等下一次询问"，不是卡死** |
+| LLM 每次工具调用的模型往返 | 3–10 s | 真正的最大开销；240s 回合≈30 次调用的来源 |
+| 发出动作 → 下一个 prompt 出现 | 取决于服务端/对手（几十 ms ~ 数秒） | 我们 `act` 只是把响应排进 UI 队列（约 1 帧内发出），之后要等服务端推下一条 `STOC_GAME_MSG`；这期间 `wait_prompt` 会一直等 |
+
+**怎么用才不觉得慢**：
+
+- 想要"停一下，等下一次问我" → `control_wait_prompt(since=已处理 seq, timeout_ms=10000~30000)`；**等待时间是玩法节奏，不是接口问题**；超时返回 `awaiting=false` 属正常。
+- 想要"看看现在什么情况" → `control_prompt`（非阻塞、约 700B、2–3ms）。
+- 不要用 `wait_prompt` 轮询；也不要把它的长耗时当成掉线/卡死（判掉线看 `control_net` 的 `alive/state/stallMs/oppClockFresh`）。
+- `timeout_ms` 不要超过 MCP 客户端的工具超时（DSH profile 里 `toolCallTimeoutMs: 180000`），否则客户端先报错。
 
 ---
 
