@@ -1053,3 +1053,8 @@ Get-Content (Get-ChildItem ranked\logs\lan-run-*.log | Sort-Object LastWriteTime
 - 任何字段/工具/环境变量变更后，**先在 `mycard-client/gframe/control*.cpp` / `bridge/mcp-server.mjs` 里 grep 确认新名字**，再改本文档；
 - 代码行号会漂移，**优先引用符号名**（`UiCleanup()` / `TryUiSemantic()` / `AppendChainJson()` / `BuildSemActions()` …）；
 - 实测数据（fallback 次数、回合数、截图）来自 exe 22:00:40 的多局记录，换版本后请复核 §9 的数字。
+- **skill 的 live 副本是权威**：`%USERPROFILE%\.dsh\skills\ygopro-play\` 会被打牌的那个 LLM **直接编辑**；仓库 `skill/ygopro-play/` 只是备份，可能落后。**改 skill 之前先跑 `bridge\sync-skill.ps1`**（只对比：哪边新、哈希、mtime），再按方向合并：
+  - 推荐 `-Apply -Direction live`（live → repo，回写仓库）
+  - `-Apply -Direction repo` 只在确认 live 不是更新版时用；live 更新时脚本会**拒绝**（需 `-Force`）
+  - 绝不要用旧仓库副本直接覆盖 live；
+  - 合并后 commit/push 仓库；live 对新会话立即生效，运行中的会话不会重载。
