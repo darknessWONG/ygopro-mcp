@@ -346,3 +346,20 @@
   3. **`resp` → hex 提交**：`/act?seq=8&hex=0100`（`resp=0` 的铠蜥蜴）→ `SEND RESPONSE curMsg=15` → `firstid=110(MSG_BATTLE)`，guest LP `8000→7500`（-500 = 2000 ATK − 1500 DEF），host 攻击怪存活——证明选中的是 `resp` 对应的卡，不是列表下标。
   4. **回归**：`summon → place → to_ep → to_bp → attack` 全 `/act_id` 正常，`retry=0`、无 RETRY/eof/disconnect，`inDuel` 全程 true、turn 正常递增。
 - **备注**：`mcp-server.mjs` 里 `control_wait_prompt` 的描述已同步为"≤15:34:59 旧行为 / 14:53:57+ 已修"（lead commit `16e7553`）；**运行中的 MCP server 需重启才会加载新描述**。
+
+---
+
+## 18. 2026-11-26 座位坐标修复（guest 阵营反向）
+
+- **现象**：guest 侧（`mySeat=1`）看到**自己的卡 `isMine:false`**、chain label 显示「对手」；**对手的卡 `isMine:true`**。host（`mySeat=0`）恰好正常，因此长期被掩盖；此前文档只能建议"用卡名反查"判断敌我。
+- **根因**：内核 `controler` 是**本地视角**（0=我、1=对手），而 `mySeat` 是**服务端座位**；旧代码直接 `isMine = (ctrl == mySeat)`，guest 时整条链反了。`chainCandidates` 还存在"isMine 先于 ctrl 计算"的顺序 bug，chain 路径 label「我方/对手」也跟着错。
+- **修复（`2026-11-26 10:26:12 / 6,335,488 / 7D3A4D92…`）**：
+  - 新增 `ToServerSeat(localCtrl, mySeat)`：`0→mySeat`、`1→1−mySeat`、`>=2` 原样；
+  - 手牌/场面、候选卡、`chainList`/`chainStackSnap`/`chainStackFull`/`chainCandidates`、`places`（含 `ctrlRaw`）、`CaptureChainAnalyze` fallback **全部统一**：`ctrl`=服务端座位、`isMine==(ctrl==mySeat)`、`name` 回填；
+  - 修 `chainCandidates` 的 isMine/ctrl 顺序；chain 路径 label「我方/对手」用转换后 isMine；`lastChainEvent` 不动（本来就是服务端座位）。
+- **验证（bot-scout `ranked/logs/seat-isMine-validation.md`，`seat-ismine-20261126-104522/`）PASS**：
+  - guest 侧 `summonableCards ctrl=1 isMine=true`（自己）；host 视角 guest 的卡 `isMine=false`；双侧 `ctrl==isMine` 一致；
+  - `places`：`ctrl` 服务端、`ctrlRaw` 本地、响应仍用 `bit`；
+  - chain 回归：`我方[黑洞]/对手[旋风]` label 正确；
+  - `resp`→hex 回归正常（`hex="01"+resp`）、`retry=0`、无 RETRY/eof。
+- **文档**：`MCP-INTERFACE.md` §4.0 新增「座位坐标约定」；`PLAYBOOK-FULL.md` §4.1/字段字典补 `ctrl/isMine/ctrlRaw/mySeat/myPlayer`。**判断敌我用 `isMine`（`ctrl==mySeat`），不要再靠卡名反查。**

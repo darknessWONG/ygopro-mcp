@@ -27,7 +27,7 @@
 
 | 需要 | 说明 |
 |---|---|
-| **带控制层的 YGOPro 客户端** | 本仓库**不包含**客户端二进制。控制层是客户端源码里的扩展（`gframe/control*.cpp`，HTTP 端点 `/state` `/prompt` `/wait_prompt` `/actions` `/act_id` `/net` `/ui` 等）。<br>**已测试构建**：`YGOPro.exe` **`2026-11-23 14:53:57` / `6,334,464 B`**<br>SHA256：`6B7DD18960E0511FB9548684EDE7B13B438FFF4E5D48EED4F47AC846BFC91BBB`<br>核对：`node doctor.mjs --client <exe>`（默认比 size；加 `--strict-build` 同时比 sha256 —— 用于区分"同 size 不同 build"）。<br>构建：用带控制层补丁的 YGOPro 源码（MyCard 客户端 fork）自行编译，产物放到例如 `mycard-client/bin/release/x64/YGOPro.exe`。 |
+| **带控制层的 YGOPro 客户端** | 本仓库**不包含**客户端二进制。控制层是客户端源码里的扩展（`gframe/control*.cpp`，HTTP 端点 `/state` `/prompt` `/wait_prompt` `/actions` `/act_id` `/net` `/ui` 等）。<br>**已测试构建**：`YGOPro.exe` **`2026-11-26 10:26:12` / `6,335,488 B`**<br>SHA256：`7D3A4D926340D5358E889CB39242F11D9B48C43E8DBFABEF072F5254A131286C`<br>核对：`node doctor.mjs --client <exe>`（默认比 size；加 `--strict-build` 同时比 sha256 —— 用于区分"同 size 不同 build"）。<br>构建：用带控制层补丁的 YGOPro 源码（MyCard 客户端 fork）自行编译，产物放到例如 `mycard-client/bin/release/x64/YGOPro.exe`。 |
 | **Node.js ≥ 18** | 只用内置模块（`fetch`/`http`/`child_process`），**零 npm 依赖**。 |
 | （可选）卡组 `.ydk` | 客户端自己的 `deck/` 目录；控制层用 `POST /deck?name=Blackwing` 预载。本仓库不含卡图/卡表。 |
 
@@ -129,7 +129,8 @@ node doctor.mjs --client "C:\path\to\YGOPro.exe" --strict-build   # 发布自检
 
 ### 更新记录（近期）
 
-- **2026-11-23** 客户端 `14:53:57 / 6,334,464 B`：**MCP 实战反馈修复版**——① `wait_prompt` 阻塞语义修正（`seq>since && awaiting` 才返回；超时返回最新快照；旧版 `|| !awaiting` 的旧快照 bug 已修）；② 候选卡 `ctrl/isMine` 修正、新增 `selectableCards[].resp`（=响应字节值，`seqNo` 同源；响应字节用 `resp`/`seqNo` 而不是列表下标 `i`）；③ BUG-1 归类为外部断线（`NET disconnected reason=error`，非客户端逻辑）。
+- **2026-11-26** 客户端 `10:26:12 / 6,335,488 B`：**座位坐标/`isMine` 统一修复版**——新增 `ToServerSeat(localCtrl,mySeat)`（本地视角→服务端座位：0→mySeat、1→1−mySeat、≥2 原样）；手牌/场面、候选卡、`chainList`/`chainStackSnap/Full`/`chainCandidates`、`places`（含 `ctrlRaw`）全部统一为 **`ctrl`=服务端座位、`isMine==(ctrl==mySeat)`、`name` 回填**；修正 `chainCandidates` isMine 先于 ctrl 的顺序 bug、chain 路径 label「我方/对手」用转换后 isMine；`lastChainEvent` 不变。验证 `seat-isMine-validation.md`（guest `mySeat=1` 时全部 `ctrl/isMine` 正确、host 回归不变、places `ctrl` 服务端/`ctrlRaw` 本地）。
+- **2026-11-23** 客户端 `14:53:57 / 6,334,464 B`（历史）：**MCP 实战反馈修复版**——`wait_prompt` 阻塞语义修正（`seq>since && awaiting`）、候选卡 `ctrl/isMine` 修正 + `selectableCards[].resp`（响应用 `resp`/`seqNo` 不是下标 `i`）、BUG-1 归类外部断线。现已被 `10:26:12` 版取代。
 - **2026-11-20** 客户端 `15:34:59 / 6,329,856 B`（历史）：**stall 诊断版**（判死逻辑不变）——`/net` 新增 `stallMs`/`oppTimeLeft`/`oppClockFresh`、`NET STALL`（`YGO_STALL_WARN_MS` 默认 120000/30s）；`stallMs>120s && oppClockFresh=false` = 对方卡住 → `control_leave` 离桌重排。现已被 `14:53:57` 版取代。
 - **2026-11-19** 客户端 `17:33:31 / 6,330,368 B`（历史）：**看门狗回归修复版**（修 `g_timeLeft` 不清零导致 `clockRunning` 永久 true）——`g_timeLeftTick` + `clockFresh(<3s)` + `clockRunning=ourTurn&&clockFresh`；`/net` 新增 `ourTurn/oppTurn/timeLeft/clockFresh`；heartbeat 空闲时 15s；验证 `net-watchdog-validation.md` 4/4 PASS；**不再建议 600000**（默认 60000）。现已被 `15:34:59` 版取代。
 - **2026-11-17** 客户端 `15:18:21 / 6,329,344 B`（历史）：**逐卡选择修复版**（修"有对象的攻击不结算"）——`/actions` 对 `MSG_SELECT_CARD/TRIBUTE/UNSELECT_CARD`（单目标）每个候选一条 `kind:"select_card"`（label 带 atk/def/loc/seq），`select_auto` 只作多选兜底；`/prompt.selectableCards[]` 新增 `position`、战斗目标窗 `isAttackTarget:true`；单目标 `id=0` 仍等价旧行为；验证 `attack-target-choice-validation.md` A–E PASS。现已被 `17:33:31` 版取代。

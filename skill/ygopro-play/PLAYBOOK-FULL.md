@@ -2,7 +2,7 @@
 
 > **读者**：要真正操作这套桥接去排位/局域网打牌的 LLM agent（以及维护它的工程师）。
 > **目标**：零歧义——每一步"做什么、调什么、返回什么、怎么判定成功/失败、失败怎么修"。
-> **当前客户端构建**：`2026-11-23 14:53:57 / 6,334,464 B`，SHA256 `6B7DD18960E0511FB9548684EDE7B13B438FFF4E5D48EED4F47AC846BFC91BBB`（`node doctor.mjs --client <exe> --strict-build` 可校验）。
+> **当前客户端构建**：`2026-11-26 10:26:12 / 6,335,488 B`，SHA256 `7D3A4D926340D5358E889CB39242F11D9B48C43E8DBFABEF072F5254A131286C`（`node doctor.mjs --client <exe> --strict-build` 可校验）。
 > **权威性**：本文是操作流程的权威；字段级契约见 [`MCP-INTERFACE.md`](MCP-INTERFACE.md)，排位实战记录见 [`RANKED-REPORT.md`](RANKED-REPORT.md)，精简单页见 [`MATCH-PLAYBOOK.md`](MATCH-PLAYBOOK.md)。
 > **本文所有示例字段名都按当前客户端真实输出**（可对照 `ranked/logs/playbook-samples/` 下的真实采样）。
 
@@ -443,6 +443,8 @@ control_act({ seq: <当前 seq>, hex: "000201" })
 
 ### 4.1 `GET /state`（顶层）
 
+> **座位坐标（`10:26:12` 起统一）**：`ctrl` 一律**服务端座位**、**`isMine == (ctrl == mySeat)`**；`hand[0]`/`monsters[0]` 是**本地索引顺序**，`myPlayer` 恒 0 只是索引视角；guest（`mySeat=1`）时自己的卡 `ctrl=1/isMine=true`、对手 `ctrl=0/isMine=false`；`places[]` 的 `ctrl` 服务端、`ctrlRaw` 本地（响应用 `bit`）。**旧版 guest 阵营反向（≤11-23 14:53:57 已修）**，判断敌我优先用 `isMine`，别再靠卡名反查。
+
 | 字段 | 含义 | 典型值（未进房 → 对局中） |
 |---|---|---|
 | `valid` | 快照是否有效 | `false` → `true` |
@@ -452,7 +454,7 @@ control_act({ seq: <当前 seq>, hex: "000201" })
 | `lp` | `[我方,对手]`（`lpOrder:"local"` 保证顺序） | `[8000,8000]` → `[8000,6500]` |
 | `phase`/`phaseName` | 阶段号/名 | `-1/UNKNOWN` → `4/MAIN1` |
 | `curMsg` | 当前内核消息 id | `0` → `11`（SELECT_IDLECMD）等 |
-| `myPlayer`/`mySeat` | 本地视角（恒 0）/ 实际座位 | `0`/`0`（客机可能是 `1`） |
+| `myPlayer`/`mySeat` | `myPlayer`=本地索引视角（恒 0）；`mySeat`=**真实服务端座位**（房主 0 / 客人 1） | `0`/`0`（客机 `0`/`1`） |
 | `turnPlayerLocal` | 本地视角的回合玩家 | `-1` → `0`（你）/`1`（对手） |
 | `isMyTurn` | 是否轮到你 | `false`/`true` |
 | `winPlayer` / `winPlayerLocal` | 原始座位号 / 本地视角（0=你赢/1=对手赢/-1=无） | `-1` → `1`（我们 seat0 时=对手赢） |
@@ -464,7 +466,7 @@ control_act({ seq: <当前 seq>, hex: "000201" })
 | `sidePending`/`tpPending` | 换备/先后攻挂起 | `false`/`false` |
 | `deckMain`/`deckExtra` | 卡组张数 | `0` → `40/15` |
 | `counts` | `{hand,grave,remove,deck,extra}` 各 `[我,对]` | `{"hand":[5,5],...}` |
-| `hand`/`monsters`/`spells`/`grave`/`banished` | 卡明细数组 `[我,对]`；卡 `{code,atk,def,pos,faceup,hidden,ty,lv,name,loc,seq}` | `[[],[]]` → 有卡 |
+| `hand`/`monsters`/`spells`/`grave`/`banished` | 卡明细数组 `[我,对]`（本地索引顺序）；卡 `{code,atk,def,pos,faceup,hidden,ty,lv,name,loc,seq,ctrl,isMine}`——**`ctrl` 服务端座位、`isMine==(ctrl==mySeat)`**（guest `mySeat=1` 时自己卡 `ctrl=1/isMine=true`） | `[[],[]]` → 有卡 |
 | `chainDepth`/`chainStack`/`chainCandidates`/`canDecline` | 连锁信息 | `0/[]/[]/true` |
 | `ui` | UI 状态（弹窗/窗口） | 见 4.7 |
 | `pipeline` | 管线诊断 | 见 4.6 |
@@ -519,7 +521,7 @@ control_act({ seq: <当前 seq>, hex: "000201" })
 | 阶段 | `canBp` `canEp` |
 | 候选卡 | `summonableCards` `spsummonableCards` `msetableCards` `ssetableCards` `activatableCards` `attackableCards` |
 | 连锁 | `chainDepth` `chainStack` `chainingTo` `chainCandidates` `canDecline` `hint` `lastChainEvent` |
-| 放置 | `places` `placesMask` `placeCoords`（`"server"`） |
+| 放置 | `places` `placesMask` `placeCoords`（`"server"`）；`places[].ctrl`=服务端座位、`ctrlRaw`=本地视角（调试），**响应用 `bit`** |
 | 先/后攻/换备 | `tpPending` `tpOptions`（`[1,2]`）/ `sidePending` `sideSummary` `sideChooseBy` `sideError` |
 
 ### 4.5 `/net`（重连/存活）
