@@ -20,6 +20,7 @@ description: 用 MCP 控制层真实操作 YGOPro 客户端打牌（MC 线上排
 6. **`awaiting=false` 不发动作**；同一条 prompt 只回一次（`seq` 去重）；`/act_id` 带 `seq=` 防过期。
 7. **整场胜负只信 `control_match`**，不要用 `winPlayer` 推。
 8. **EOF guard（10:25:14 版起）**：prompt 空等 ~90s 会被 MC 排位按 AFK `eof` 踢；`YGO_PROMPT_AUTO_DEFAULT_MS`（默认 60000，0=关）45s 打 `PROMPT idle warning`、60s 自动发保守默认（`PROMPT auto-default ... (idle guard, LLM silent)`）。**超 60s 没答会被 guard 顶掉（保守动作），但别依赖它——正常要快**；`/prompt.awaitingSinceMs` 可看等待时长。
+9. **座位坐标（11-26 10:26:12 版起）**：`ctrl`/`isMine` 全部是**服务端座位坐标**，恒有 **`isMine == (ctrl == mySeat)`**——判敌我只用 `isMine` 或 `ctrl==mySeat`，**不要用 `ctrl` 猜**。`hand[0]` 是**本地手牌**（本地视角）、`myPlayer` 恒 0 只是索引视角（`hand[1]`=对手）。`places[]` 的 `ctrl` 是服务端座位、`ctrlRaw` 是本地原值，响应仍用 `bit`。旧版（≤11-23 14:53:57）在 **guest（mySeat=1）** 时会把双方阵营整体写反（自己的卡标「对手」、`isMine:false`），升级即可。
 
 ## 1. 先确认可用（30 秒）
 
@@ -77,6 +78,36 @@ while not state.match.over:
 8. **摆位：EMZ 的容量规则** —— 额外怪兽区每家只有 1 个；**非连接（非 Link）怪物只能占用其中 1 个**（Link 怪可以指到对面的 EMZ）。
    → 所以「优先 `seq=5|6`」只在 **EMZ 空着**时成立。第二只额外怪会**只能落主区 `seq=0..4`**。
    具体"哪只怪必须进 EMZ 才有价值"是**卡组策略，不在这里** —— 见卡组文档（本卡组的 `停止下注` 就是典型）。
+9. **🔴 连锁窗口模式 `chainMode` —— 这才是 TIMEOUT 的真正机制**（2026-11-25 实测）
+   **现象**：`ourTurn:false`（对方回合）期间**我的时钟 `timeLeft` 也在掉**（实测 240 → 37），并两次出现 `STOC_TIME_LIMIT`。
+   **原因**：对方**每一个**效果都在我这边弹一次「是否连锁？」窗口，**每次应答都扣我的时钟**（10–20s/次）。
+   更糟：**窗口里经常包含你其实接不了的卡** —— 每次误判都要多烧一次 10–20s 往返。
+   ⚠️ **但"窗口出现"本身不是 bug**（我一开始误判成"桥接在非法时点弹出"，是错的）：
+   YGO 有**自由时点 / 自由连锁（フリーチェーン）**，很多效果本来就能在几乎任何时点发动，窗口频繁是正常现象。
+   **判断"能不能接"看两件事**：① 这张卡是几速；② 当前是不是在组建连锁中。
+   - **2速以上**（`灰流丽` / `幽鬼兔` / `增殖的G` 这类**诱发即时效果**）→ 能连锁对方效果
+   - **1速**（`效果遮蒙者` 是**起动效果**！「对方主要阶段…以对方场上1只表侧怪兽为对象才能发动」）→ **不能连锁**，只能在自由时点发动
+   → 完整规则见知识库 `common/01_rules.md` §8.5；**别再把规则问题报成客户端 bug**。
+   **处置（实测有效）**：用控制层 `/ui?chain=` 管住可选连锁窗口：
+   ```
+   GET /ui?chain=ignore    # 对方回合：不再弹可选连锁，止住刷屏、时钟不再被榨干
+   GET /ui?chain=avail     # 自己回合：**必须切回来**，否则「抽到时特召」等自家效果接不到
+   ```
+   **⚠️ 权衡**：`ignore` 会**连合法手坑和自己家的可选诱发效果一起跳过**（灰流丽/遮蒙者/幽鬼兔，以及本家的「抽到时特召」「西艾萝抽卡」）→ **它是止损手段，不是默认**。
+   推荐节奏：**开局 `avail` → 对方回合 `timeLeft` 掉得快（<150）或 prompt 刷屏 → `ignore` 止损 → ① 轮到自己第一件事就是切回 `avail`。**
+   **🔴 最容易犯的错：切了 `ignore` 忘记切回 `avail`** —— 之后你**自己**的「抽到时→特召」等可选诱发会被客户端自动放弃，白丢展开（2026-11-25 实测吃亏）。
+   **把「己方回合开始 → 切 avail」当成一条固定动作**，跟自己回合第一件事绑定。
+   **注意**：`/ui?chain=` **有延迟** —— 返回里 `desired:"ignore"` 但 `chainModeName` 还是旧值且 `applyPending:true`，**下一帧才生效**，别立刻依赖回读值。
+   （MCP 没有对应工具，只能走 HTTP `/ui?chain=`；可用 `control_state().ui.chainMode` 读当前值。）
+
+10. **🔴 自由时点的窗口会"重发"，能把预算打爆**（2026-11-25 实测：单回合 **44 次**调用，预算 12–14）
+   典型：**速攻魔法**（如 `落胤与圣女`）在自由时点每给一次优先权就弹一次 → decline→再弹→再 decline，循环烧往返。
+   **处置**：
+   - **进主阶段前就想好"这个速攻要不要用"**，要就用掉、不用就一次性 decline 到下一事件，别反复犹豫；
+   - 一回合内同一个窗口反复出现时，**考虑临时切 `ignore`** 直接止住（记得回合开始切回 `avail`）。
+11. **🔴 选卡前必须重新取一次 `control_actions`**（防 id/下标错位）
+   实测事故：按 `select_card #3`（对方的关键卡）提交，**结算却炸掉了自己场上的怪** —— 怀疑 prompt 与 actions 之间存在帧差，`selectableCards` 在两次调用间重排。
+   **纪律**：① 拿到 `select_card` 列表后**立刻**提交，中间不插任何其它调用；② 若中间隔了别的调用（读局面/查日志），**必须重新 `control_actions` 再选**；③ 优先用 label 里带**卡名**的候选来核对，不要只凭 `code`/下标。
 
 选动作：`yesno` 按收益；`option` 按效果；`card/place` 用 prompt 里的 `selectableCards/placeOptions`；`chain` 有反制才链；`position` 按场面；`idlecmd` 展开/结束；`side_ok` 见第 2 节第 9 步；`tp` 必须快。
 
@@ -120,6 +151,7 @@ while not state.match.over:
 | `side_ok` 报 `counts must match` | 换备不守恒 | 换回等量再 done |
 | 攻击目标提交无效（旧版） | `curMsg` 15↔10 反复 | 升级 exe；否则降级直接攻击/to_m2/end_battle |
 | 目标窗总是打第一只/选完不结算 | 旧版 `/actions` 只有一条 `select`（≤11:31:00） | 升级 `15:18:21+`；用 `kind:"select_card"` 显式选（`isAttackTarget=true` 时） |
+| **guest（mySeat=1）时阵营反了**（自己手牌/候选/chain 卡 `isMine:false`、label 写成「对手[...]」、对方卡 `isMine:true`） | 旧版（≤11-23 14:53:57）把 `controler`（本地视角 0=我）直接和 `mySeat`（服务端座位）比较；host 时两者都 0 所以测不出 | 升级 `11-26 10:26:12+`（输出统一服务端座位，`isMine==(ctrl==mySeat)`）；判敌我只用 `isMine`/`ctrl==mySeat` |
 | 排序 prompt 死循环 | `curMsg==25` 反复 | `control_act({seq, hex:"0001"})` 裸字节重发；20:11:00 已改直连字节 |
 | 卡在 `curMsg==143`、`awaiting=false` | 旧版 announce prompt 未发布 | 升级 20:11:00+；用 `/actions` 的 `announce_number`（数值本身）/`announce_race/attrib/card` |
 | `stale action id` | `/act_id` 的 seq 旧了 | 重新 `control_actions` 再发 |
