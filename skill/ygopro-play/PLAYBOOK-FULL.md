@@ -2,7 +2,7 @@
 
 > **读者**：要真正操作这套桥接去排位/局域网打牌的 LLM agent（以及维护它的工程师）。
 > **目标**：零歧义——每一步"做什么、调什么、返回什么、怎么判定成功/失败、失败怎么修"。
-> **当前客户端构建**：`2026-11-27 17:09:18 / 6,336,000 B`，SHA256 `408C8C5A2B66F36CC267C9DF03B0E3D6C3628A66A22EACE0802E799766D20405`（`node doctor.mjs --client <exe> --strict-build` 可校验）。
+> **当前客户端构建**：`2026-11-27 17:22:16 / 6,338,048 B`，SHA256 `99FC53A3B2A7121A7EFBCF81A312F9499E603E8122ED6C37CC326C9B023C0708`（`node doctor.mjs --client <exe> --strict-build` 可校验）。
 > **权威性**：本文是操作流程的权威；字段级契约见 [`MCP-INTERFACE.md`](MCP-INTERFACE.md)，排位实战记录见 [`RANKED-REPORT.md`](RANKED-REPORT.md)，精简单页见 [`MATCH-PLAYBOOK.md`](MATCH-PLAYBOOK.md)。
 > **本文所有示例字段名都按当前客户端真实输出**（可对照 `ranked/logs/playbook-samples/` 下的真实采样）。
 
@@ -283,7 +283,7 @@ loop:
 | `chain`/`decline` | `MSG_SELECT_CHAIN` | 接/不接连锁；`canDecline=false` 时必须接 |
 | `yes`/`no` | 是否系 | 1/0 |
 | `option` | 多效果选择 | 选第 N 个（默认 0 可能不是最优） |
-| `position` | 表示形式（`MSG_SELECT_POSITION`=19） | **按 `/prompt.selectablePositions` 掩码动态生成**：`attack position (face-up ATK)`=0x1 / `attack position (face-down ATK / set)`=0x2 / `defense position (face-up DEF)`=0x4 / `defense position (face-down DEF / set)`=0x8；**`index` 就是 POS 位值，别用 1/2 猜**（旧版写死 defense=0x02 是"里侧攻击"，非法响应导致 `seq` 连发）；单 bit 掩码客户端自动应答 |
+| `position` | 表示形式（`MSG_SELECT_POSITION`=19） | **按 `/prompt.selectablePositions` 掩码动态生成**：`attack position (face-up ATK)` / `attack position (face-down ATK / set)` / `defense position (face-up DEF)` / `defense position (face-down DEF / set)`；**当前构建（`17:22:16`）按 `label` 选**（action JSON 只有 `id/kind/label`，**无 `index`**；`index` 字段自下个 build（>17:22:16）起提供），`act_id` 内部按 label 编码 POS 值（日志 `i=1/2/4/8`），别用 1/2 猜；单 bit 掩码客户端自动应答；旧版写死 `defense=0x02`（=里侧攻击，非法响应导致 `seq` 连发）已修 |
 | `place` | 放格子 | 选合法格（label 带 bit/mask/ctrl/loc/seq） |
 | `select` | 选卡（旧版唯一一条） | 选前 N 张（N=`selectMin`）——单目标时**永远选第一只**，攻击目标别用 |
 | **`select_card`（15:18:21 起，单目标）** | `MSG_SELECT_CARD/TRIBUTE/UNSELECT_CARD` | **每个候选一条**（`index=i`，label `attack target: card #i code=.. atk=.. def=.. loc=.. seq=..`）；**攻击目标必须按 `atk/def` 选这张**（编码 `[1][seqNo]`） |
@@ -525,7 +525,7 @@ control_act({ seq: <当前 seq>, hex: "000201" })
 | 可召唤计数 | `summonable` `spsummonable` `msetable` `ssetable` `reposable` `activatable` `attackable` `chains` `chainForced` `lastChain` |
 | 选卡 | `selectMin` `selectMax` `selectCancelable` `selectableCount` `selectableCards`（每项含 `i/code/atk/def/lv/position/loc/seq,seqNo,resp,ctrl,isMine`；`14:53:57` 起 `ctrl/isMine` 已修、新增 `resp`）。**`i` 是列表下标（只给 `control_actions` id 用）；响应字节用 `resp`（= `seqNo`，select_seq）：`hex="01"+resp hex`**（如 `resp=9` → `hex="0109"`）。首选 `control_actions` 的 `kind:"select_card"` id，别手拼 hex；**`isAttackTarget`**（`15:18:21` 起：战斗目标窗=true，必须用 `select_card` 按 `atk/def` 选） |
 | 宣言 | `announceNumberValues`（仅 `MSG_ANNOUNCE_NUMBER(143)`：可用数值列表，`announce_number` 的候选；响应=数值本身） |
-| 表示形式 | `selectablePositions`（仅 `MSG_SELECT_POSITION(19)`：合法 POS 掩码 `0x1` 表攻 / `0x2` 里攻 / `0x4` 表守 / `0x8` 里守 的按位或；`/actions` 按掩码动态生成 position 动作，`index`=POS 位值；单 bit 自动应答） |
+| 表示形式 | `selectablePositions` / `selectablePositionsHex`（仅 `MSG_SELECT_POSITION(19)`：合法 POS 掩码 `0x1` 表攻 / `0x2` 里攻 / `0x4` 表守 / `0x8` 里守 的按位或；`/actions` 按掩码动态生成 position 动作——**当前构建按 label 选、`act_id` 自动编码 POS 值**（`index` 字段自下个 build >17:22:16 起提供）；单 bit 自动应答） |
 | 阶段 | `canBp` `canEp` |
 | 候选卡 | `summonableCards` `spsummonableCards` `msetableCards` `ssetableCards` `activatableCards` `attackableCards` |
 | 连锁 | `chainDepth` `chainStack` `chainingTo` `chainCandidates` `canDecline` `hint` `lastChainEvent`（阵营文本如 `我方发动 [黑洞]…`/`对手发动 […]`；**敌我按 `mySeat` 判定**——服务端 `cc` 与 `mySeat` 比较；`mySeat` 来自 `dInfo.isFirst`，`SEAT resolved seat=.. isFirst=..` 日志可核对） |

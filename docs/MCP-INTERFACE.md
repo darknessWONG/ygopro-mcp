@@ -4,8 +4,8 @@
 > **先读（操作流程）**：[`PLAYBOOK-FULL.md`](PLAYBOOK-FULL.md) —— 全流程权威操作手册（每步判定/工具速查/状态字典/排错）；本文档是字段与接口契约。
 >
 > **适用版本（当前正式版 exe）**：`mycard-client/bin/release/x64/YGOPro.exe`
-> = **2026-11-27 17:09:18 / 6,336,000 B**，SHA256 `408C8C5A2B66F36CC267C9DF03B0E3D6C3628A66A22EACE0802E799766D20405`
-> （2026-11-27 **side_ok label 三态 + `changed` 版**：`/actions` 在 `sidePending` 时 `side_ok` label 三态（no changes / changed / counts mismatch），JSON 新增**顶格 `changed`**（`/side_swap` 成功→true、每个新窗口复位 false；与 `counts`/`sideError` 同级，不在 `actions[0]` 里）；**张数相等 ≠ 没换牌**。另含前版 SelfSeat（`isFirst` 判定）/时点四态 normal/座位坐标/wait_prompt/stall/看门狗；验收/历史见文末记录）
+> = **2026-11-27 17:22:16 / 6,338,048 B**，SHA256 `99FC53A3B2A7121A7EFBCF81A312F9499E603E8122ED6C37CC326C9B023C0708`
+> （2026-11-27 **position 掩码 + `ignore` keep-own 版**：`MSG_SELECT_POSITION` 捕获合法掩码 → `/prompt.selectablePositions` + `selectablePositionsHex`；`/actions.position` 按掩码动态生成（表攻/里攻/表守/里守），旧版写死 `defense=0x02`（里侧攻击、非法响应 `seq` 连发）已修；**当前构建 action 项只有 `id/kind/label`（无 `index`），用 label 选、`act_id` 自动编码 POS；`index` 自下个 build（>17:22:16）提供**。`ignore` 保留含我方候选的窗口（`YGO_CHAIN_IGNORE_KEEP_OWN` 默认 1）。另含前版 side_ok `changed`/SelfSeat/时点四态/座位坐标；验收/历史见文末记录）
 > `/state.resume.reason` 在加载成功时返回 `"loaded"`，行为不变；22:23:28 已做过冒烟）。
 > 该版含重连基础能力：`GET /net`、自动 `/tip` 探活、`YGO_SUPPRESS_MODALS` 模态框抑制、
 > `resume-context-<port>.json` journal、`POST /leave`（详见 [RECONNECT-DESIGN.md](RECONNECT-DESIGN.md)、[reconnect-lab.md](reconnect-lab.md)）。
@@ -347,7 +347,8 @@ guest 应为 `seat=1 isFirst=0`、host `seat=0 isFirst=1`（`selftype` 依赖服
 | `awaitingSinceMs` | **仅 `awaiting=true` 时出现**：等待已持续毫秒；>45s 客户端打 `PROMPT idle warning`，默认 60s 自动兜底（`YGO_PROMPT_AUTO_DEFAULT_MS`，见 §8.1） |
 | `announceNumberValues` | **仅 `MSG_ANNOUNCE_NUMBER(143)` 时出现**：可用数值列表（int32）；`/actions` 为每个值给一条 `kind:"announce_number"`，选中后响应 = **数值本身**（不是下标） |
 | `canBp` / `canEp` | 可否进战阶 / 可否结束阶段 |
-| `selectablePositions` | **仅 `MSG_SELECT_POSITION(19)` 时出现**：合法 POS **掩码**（`0x1` 表攻 / `0x2` 里攻 / `0x4` 表守 / `0x8` 里守 的按位或）。`/actions` 按该掩码**动态生成** position 动作（`index` = 对应 POS 位值，不是 1/2）；**单 bit 掩码时客户端自动应答、不弹窗口**（如只要守备 `0x4`） |
+| `selectablePositions` | **仅 `MSG_SELECT_POSITION(19)` 时出现**：合法 POS **掩码**（`0x1` 表攻 / `0x2` 里攻 / `0x4` 表守 / `0x8` 里守 的按位或）；另带 `selectablePositionsHex`（如 `"0x5"`）。`/actions` 按该掩码**动态生成** position 动作；**单 bit 掩码时客户端自动应答、不弹窗口**（如只要守备 `0x4`） |
+| `selectablePositionsHex` | 同上掩码的十六进制字符串（`"0x5"` / `"0x9"` 等），方便人/LLM 读 |
 | `sumTarget` / `sumMode` | 素材合计目标值 / 合计方式（用于 `MSG_SELECT_SUM`） |
 | `isFirst` / `placeCoords` | 是否先手 / 当前选格坐标口径（`server`\|`local`） |
 
@@ -421,6 +422,7 @@ guest 应为 `seat=1 isFirst=0`、host `seat=0 isFirst=1`（`selftype` 依赖服
 | **3** | **`normal`**（常用时点，**默认**） | **`avail` 的基础上再过滤掉一些非常用的询问**（只问 spec/select-trigger 类窗口） |
 
 > 实现对应（脚注，仅供排障）：auto-decline 门在客户端 `duelclient.cpp:1886`——`all` 永不放弃；`avail` 仅 `count==0`；`normal` 在 `count==0 || specount==0`；`ignore` 无条件（`forced` 除外）。旧版 `/ui` 曾把 `normal` 误报为 `avail`（≤11-23 14:53:57）。
+> **`ignore` 不再吞我方诱发（`17:22:16` 起）**：`ignore` 的 auto-decline 现在会先看 `activatable_cards` 是否有 `controler==0`（我方）候选；有则**保留窗口正常弹 prompt**（`YGO_CHAIN_IGNORE_KEEP_OWN=1` 默认；`0`=旧行为）。日志 `CHAIN client auto-decline ... ownCand=.. ignoreDecline=.. keepOwn=..`。
 
 | 其他字段 | 说明 |
 |---|---|
@@ -466,7 +468,7 @@ guest 应为 `seat=1 isFirst=0`、host `seat=0 isFirst=1`（`selftype` 依赖服
 | `select` | `MSG_SELECT_CARD`(15)/`SELECT_TRIBUTE`(20)/`SELECT_UNSELECT_CARD`(26) | `select first N card(s)` | 一次选前 N 张（N=`selectMin` 或 1）；**旧版只有这一条 → 永远选 selectable[0]** |
 | `select_card`（15:18:21 起，单目标） | `MSG_SELECT_CARD`(15)/`SELECT_TRIBUTE`(20)/`SELECT_UNSELECT_CARD`(26) | `attack target: card #1 code=1500 atk=1500 def=1200 loc=4 seq=0` | **每个候选一条**，`index=i`；编码 `[1][候选 seqNo]`；**攻击目标必须用它按 atk/def 选** |
 | `select_auto`（15:18:21 起） | 同上（`selectMin>1` 时只有它） | `select_auto` | 兜底：`[n][seqNo...]`；**单目标时等价旧 `id=0`（永远第一只）**，不要拿它打有对象的攻击 |
-| `position` | `MSG_SELECT_POSITION`(19) | **按合法掩码动态生成 4 种**：`attack position (face-up ATK)` / `attack position (face-down ATK / set)` / `defense position (face-up DEF)` / `defense position (face-down DEF / set)` | **`index` 就是 POS 位值**：`0x1` / `0x2` / `0x4` / `0x8`——**不要用 1/2 猜**（旧版写死 `defense=0x02` 实际是"里侧攻击"，非法响应导致 `seq` 连发不推进） |
+| `position` | `MSG_SELECT_POSITION`(19) | **按合法掩码动态生成 4 种**：`attack position (face-up ATK)` / `attack position (face-down ATK / set)` / `defense position (face-up DEF)` / `defense position (face-down DEF / set)` | **按 `label` 选即可**；**当前构建（`17:22:16`）action 项只有 `id/kind/label`，没有 `index` 字段**（`index` 自**下个 build（>17:22:16）**起提供）；POS 值由 `act_id` 内部按 label 编码（日志 `SEND RESPONSE realMsg=19 i=1/2/4/8`）。旧版写死 `defense=0x02`（=里侧攻击，非法响应导致 `seq` 连发）已修；`selectablePositions(Hex)` 只用于展示/校验 |
 | `place` | `MSG_SELECT_PLACE`(18)/`MSG_SELECT_DISFIELD`(24) | `place bit=8 mask=0 ctrl=1 p0=1 seat=1 first=0 loc=8 seq=0` | index=places 下标；4 变体自愈（`placeVariant`） |
 | `sum` | `MSG_SELECT_SUM`(23) | `auto-select materials` | 自动选素材 |
 | `counter` | `MSG_SELECT_COUNTER`(22) | `auto-place counters` | 自动放指示物 |
@@ -479,7 +481,7 @@ guest 应为 `seat=1 isFirst=0`、host `seat=0 isFirst=1`（`selftype` 依赖服
 - `id` 是候选数组下标，**prompt 一变就重新编号**；`label` 只是给人/LLM 看的，不要解析出行为依赖。
 - `kind` 是稳定语义；策略只判断 `kind` + `label`/卡号即可。
 - `place` 的 `ctrl`/`loc`/`seq` 是客户端已按"本地半区"规则修正过的值；遇到 `MSG_RETRY` 客户端会自动换变体重试（`placeVariant`）。
-- **`position`（`MSG_SELECT_POSITION`=19）**：合法位置来自该消息的**掩码**（`/prompt.selectablePositions`），`/actions` **按掩码动态生成**可选项；`index` 直接用 POS 位值（`0x1` 表攻 / `0x2` 里攻 / `0x4` 表守 / `0x8` 里守），**不要用 1/2 猜**。掩码只有单 bit（如 `0x4`）时客户端**自动应答**、不弹窗口；合法掩码常是 `0x1|0x4`（表攻或表守） → 旧版固定送 `0x02`（里攻，不在掩码内）⇒ 服务器忽略并重发 prompt（`seq` 连发）。
+- **`position`（`MSG_SELECT_POSITION`=19）**：合法位置来自该消息的**掩码**（`/prompt.selectablePositions` + `selectablePositionsHex`），`/actions` **按掩码动态生成**可选项；**当前构建（`17:22:16`）用 `label` 选**（action JSON 只有 `id/kind/label`，**无 `index`**），`act_id` 内部会按 label 发出正确 POS 值（`0x1` 表攻 / `0x2` 里攻 / `0x4` 表守 / `0x8` 里守，日志 `i=1/2/4/8` 可核对）——**不要用 1/2 猜**；`index` 字段自**下个 build（>17:22:16）**起提供。掩码单 bit（如 `0x4`）时客户端**自动应答**、不弹窗口；掩码常为 `0x1|0x4`（表攻或表守）→ 旧版固定送 `0x02`（里攻，不在掩码内）⇒ 服务器忽略并重发 prompt（`seq` 连发）。
 - `MSG_SELECT_CHAIN` 的 `chain`/`decline` 与 §6 的 `chainCandidates[].index` **一一对应**。
 
 ---
@@ -977,6 +979,7 @@ UI close empty frame name=wMessage|wACMessage|wQuery
 | `YGO_CONTROL_PORT` | `7788` | HTTP 端口（第二个客户端请显式设，例如 `7789`） |
 | `YGO_HOOKS` | `msg`+`analyze`（=3） | mask：`msg`=1、`analyze`=2、`stoc`=4、`all`=7。**房主用 `msganalyze`，客人 `all`；房主不能用 `all`**（开局会搞死进程） |
 | `YGO_CHAIN_MODE` | **`normal`** | 连锁时点 **`all\|avail\|ignore\|normal`**（`normal`=三按钮全不按、对局默认；旧行为默认 `avail`）。开局自动应用、之后自愈重设（4 态比较）。normal 的 auto-decline 门见 §4.7（`duelclient.cpp:1886`） |
+| `YGO_CHAIN_IGNORE_KEEP_OWN` | `1` | **`ignore` 是否保留我方诱发**（`17:22:16` 起）：`1`=若 `activatable_cards` 有我方候选则不自动放弃、正常弹 prompt；`0`=旧行为（无差别放弃，会吞自家抽卡诱发等）。日志 `CHAIN client auto-decline ... ownCand=.. ignoreDecline=.. keepOwn=..` |
 | `YGO_AUTO_DISMISS` | 1 | 自动关 `MSG_RETRY`/提示框并 `actionSignal.Set()`；`0` 关（调试） |
 | `YGO_PLACE_COORDS` | `server` | 选格坐标口径：`server`=按 LocalPlayer 规则修正；`local`=原始半区（A/B） |
 | `YGO_UI_ACTIONS` … | 见 §7.5 | UI 注入系列 |
@@ -1029,7 +1032,7 @@ $env:YGO_UI_ACTIONS='0'; powershell ... bridge\lan-run.ps1 -Games 1
 5. **链字段有 1 帧延迟**：`/state` 与 `/prompt` 的链字段来自 UI 线程快照；`chainStack[].forced` 恒 false、`type` 固定 `effect`。
 6. **UI 模式个别动作有 600ms 校验延迟**（点不中时才会走满）。
 7. **多效果卡默认点第 0 个 option**（可能不是最优效果）；`announce/counter/sort/sum` 是"安全默认"而非最优。
-8. **线上排位：能完整打完，但胜率依赖策略**：客户端/管线侧已实测可拿房→进房→选卡组→准备→完整对局→自然结算（LP_ZERO 等），并支持受控掉线后约 13s 重连回同房继续打；输局主要是 policy 保守（大量 `decline`/`to_bp`/`end`），不是管线卡死。**排位相关新字段（`/state.deckError`、`/state.isWin/isLoss/isDraw`、`/state.lpOrder`、`/state.pipeline.recentMsgs`、`/state.tpPending`+`/state.tpOptions`、`/actions` 的先/后攻动作 `kind:"tp"`+`index:1|2`、`/state.sidePending`、`/actions` 的换备牌动作 `kind:"side_ok"`（Bo3 每局之间，`id=0` → `btnSideOK`/`SendUpdateDeck`）、**`/state.side`（`available/pending/waiting/elapsedMs/waitingSeen/lastWaitMs/main/extra/side/counts/pre/limits/error`）+ `POST /side_swap`（真正换牌）+ `side_ok` 竞态修复**、**`/state.match`（`game`/`over`/`games[]`（含 `win`/`winnerSeat`/`reasonName`）/`gamesWonLocal`/`gamesWonOpp`/`lastWinnerLocal`/`lastReasonName`，配合 `control_match` 一句话报结果）**、`CHAIN raw` 等；Bo3 Game2/3 开局客户端会 `DUEL_START reset result state` 重置 `winPlayer/winReason`）只在客户端 `2026-11-27 17:09:18 / 6,336,000 B`（sha256 `408C8C5A2B66F36CC267C9DF03B0E3D6C3628A66A22EACE0802E799766D20405`）及之后存在**；旧 exe 请先升级。详见 [`RANKED-REPORT.md`](RANKED-REPORT.md)。
+8. **线上排位：能完整打完，但胜率依赖策略**：客户端/管线侧已实测可拿房→进房→选卡组→准备→完整对局→自然结算（LP_ZERO 等），并支持受控掉线后约 13s 重连回同房继续打；输局主要是 policy 保守（大量 `decline`/`to_bp`/`end`），不是管线卡死。**排位相关新字段（`/state.deckError`、`/state.isWin/isLoss/isDraw`、`/state.lpOrder`、`/state.pipeline.recentMsgs`、`/state.tpPending`+`/state.tpOptions`、`/actions` 的先/后攻动作 `kind:"tp"`+`index:1|2`、`/state.sidePending`、`/actions` 的换备牌动作 `kind:"side_ok"`（Bo3 每局之间，`id=0` → `btnSideOK`/`SendUpdateDeck`）、**`/state.side`（`available/pending/waiting/elapsedMs/waitingSeen/lastWaitMs/main/extra/side/counts/pre/limits/error`）+ `POST /side_swap`（真正换牌）+ `side_ok` 竞态修复**、**`/state.match`（`game`/`over`/`games[]`（含 `win`/`winnerSeat`/`reasonName`）/`gamesWonLocal`/`gamesWonOpp`/`lastWinnerLocal`/`lastReasonName`，配合 `control_match` 一句话报结果）**、`CHAIN raw` 等；Bo3 Game2/3 开局客户端会 `DUEL_START reset result state` 重置 `winPlayer/winReason`）只在客户端 `2026-11-27 17:22:16 / 6,338,048 B`（sha256 `99FC53A3B2A7121A7EFBCF81A312F9499E603E8122ED6C37CC326C9B023C0708`）及之后存在**；旧 exe 请先升级。详见 [`RANKED-REPORT.md`](RANKED-REPORT.md)。
 9. **被动判死（对手回合 60s eff + `NET silence diag`）**：对手长时间不出手时，客户端会按"对手回合 60s eff"推进判定，并在 `/net` 相关日志打 `NET silence diag`（链路静默诊断，不主动断线）；被动判死不是本仓库 policy 的行为，属客户端/服务端规则。`/net` 的 `alive`/`sinceLastStoc` 在静默期会持续增长——要区分"对手在思考（slow play）"和"对手掉线"，以 `NET silence diag` + `/net.probe` 的 `fails`/`rttMs` 判断；详见 `mycard-client/docs/CONTROL-API.md` 的 `/net` 一节。
 10. **控制驱动下 `STOC_REPLAY` 直接跳过（`replay: dialog skipped`）**：不会弹回放对话框、**不阻塞网络线程**（否则回放保存框会卡住后续 STOC）。**已 LAN 实测**（2026-11-13：双方各 2 次 `replay: dialog skipped (control-driven, no wait)`、`replay-save=0`、`stoc=23 stall=0`）；排位 LP_ZERO 结算场景同样走该路径（不再需要"未实测"假设）。若上线后出现结算后收不到后续包，先查这里。
 11. **prompt 空等 ~90s 会被服务端按 AFK `eof` 踢（MC 排位行为）；LAN srvpro 不踢 eof，而是 180s `TIMEOUT` 判负**（证据 `ranked/logs/eof-guard-validation.md`、`control-23776.log`）。`10:25:14` 版起默认 `YGO_PROMPT_AUTO_DEFAULT_MS=60000` 自动发保守默认动作兜底（45s 先打 `PROMPT idle warning`），可用 `/prompt.awaitingSinceMs` 看等待时长；`0`=关闭（不建议）。

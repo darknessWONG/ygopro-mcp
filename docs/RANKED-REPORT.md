@@ -434,8 +434,13 @@
 - **根因**：
   - A：`control_sem.cpp:144` 把 position 动作写死 `0x02`（`AddSem(...,"defense position",0x02,...)`），而引擎要 POS 位值（`ocgcore/common.h:75-82`：`POS_FACEUP_ATTACK 0x1` / `POS_FACEDOWN_ATTACK 0x2` / `POS_FACEUP_DEFENSE 0x4` / `POS_FACEDOWN_DEFENSE 0x8`）。**`0x02` = 里侧攻击**；合法掩码常为 `0x1|0x4`（表攻/表守）→ `0x02` 不在掩码内 ⇒ 非法响应 ⇒ 服务器忽略并重发 prompt。
   - B：auto-decline 门只按 `count/specount` 判断，**未区分候选归属**（我方诱发 vs 响应对手），`ignore` 无差别放弃。
-- **修复（poc 出 build 中，指纹待定）**：
-  - `MSG_SELECT_POSITION` 时保存合法掩码到 `/prompt.selectablePositions`；`/actions` **按掩码动态生成** 4 种 position 动作，`index` = **真实 POS 位值**（`0x1/0x2/0x4/0x8`）；掩码单 bit 时客户端**自动应答**（不出窗口）。
-  - `ignore` 的 auto-decline 门**保留含我方候选的窗口**（按候选归属判断）；新增 `YGO_CHAIN_IGNORE_KEEP_OWN`（默认 **1**）。
-- **文档**：`MCP-INTERFACE.md` §4.4 加 `selectablePositions`、§5 position 行动态 4 种 + "index 就是 POS 值"；`PLAYBOOK-FULL.md` §3.7 position 行 + §4.4 字段补 `selectablePositions`。
-- **验证**：待 bot-scout（PASS 后本节补证据）。
+- **修复（`2026-11-27 17:22:16 / 6,338,048 / 99FC53A3…`）**：
+  - `MSG_SELECT_POSITION` 时捕获合法掩码（`msg[6]`）→ `/prompt.selectablePositions` + `selectablePositionsHex`；`/actions.position` **按掩码动态生成**（表攻/里攻/表守/里守），编码校验掩码、非法值拒绝；掩码单 bit 时客户端**自动应答**（不出窗口）。
+  - **当前构建（`17:22:16`）action JSON 只有 `id/kind/label`、没有 `index`**：`act_id` 内部按 label 编码 POS 值（日志 `SEND RESPONSE realMsg=19 i=1/2/4/8`）。poc 已把 `SemActionsJson()` 改为输出 `{"id","kind","index","label"}`，但**该字段自下个 build（>17:22:16）才生效**。
+  - `ignore` 的 auto-decline 门**保留含我方候选的窗口**（`activatable_cards` 有 `controler==0` 候选时不放弃）；新增 `YGO_CHAIN_IGNORE_KEEP_OWN`（默认 **1**，`0`=旧行为）；日志 `ownCand=.. ignoreDecline=.. keepOwn=..`。
+- **文档**：`MCP-INTERFACE.md` §4.4 加 `selectablePositions`/`selectablePositionsHex`、§5 position 行动态 4 种（按 label 选、`index` 下个 build 起提供）、§8.1 `YGO_CHAIN_IGNORE_KEEP_OWN`、§4.7 `ignore` 保留我方诱发脚注；`PLAYBOOK-FULL.md` §3.7 position 行 + §4.4 字段。
+- **验证（bot-scout `ranked/logs/position-mask-ignore-validation.md`，build `99FC53A3`）PASS**：
+  1. **position（mask 0x5）**：`/prompt.selectablePositions=5`、`selectablePositionsHex="0x5"`；`/actions` 仅 `attack position (face-up ATK)` / `defense position (face-up DEF)`；选 defense → **`SEND RESPONSE realMsg=19 i=4`**（旧 `i=2` 已修）→ 推进、`repeatedSameSeq=0`、`RETRY after msg=19=0`；选 attack `i=1` 推进（证据 `position-ignore-pos3-20261127-174751/`、`-174909/`）。
+  2. **mask 0x9**：actions = 表攻 + `defense position (face-down DEF / set)`，选它 **`i=8`** 推进（证据 `position-ignore-quick-20261127-175018/`）。
+  3. **`ignore` 不吞我方诱发**：默认 `KEEP_OWN=1` 时「盈彩月夜之灯 库露雪」抽卡诱发 prompt 正常弹出（`chainCandidates isMine=true`、actions 有 chain/decline）；`YGO_CHAIN_IGNORE_KEEP_OWN=0` 无窗口（旧行为）（证据 `position-ignore-ignore-20261127-175737/`）。
+  4. **回归**：四态 chainMode 全 PASS（进局默认 normal、切换 <1s）、`retry=0`、无 eof。
