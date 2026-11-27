@@ -4,8 +4,8 @@
 > **先读（操作流程）**：[`PLAYBOOK-FULL.md`](PLAYBOOK-FULL.md) —— 全流程权威操作手册（每步判定/工具速查/状态字典/排错）；本文档是字段与接口契约。
 >
 > **适用版本（当前正式版 exe）**：`mycard-client/bin/release/x64/YGOPro.exe`
-> = **2026-11-27 15:03:45 / 6,335,488 B**，SHA256 `33CF5166CD9A9E7380B03158AE684DB719F4553C2776FAFC897D526AD4A893AB`
-> （2026-11-27 **SelfSeat 修复版**：`SelfSeat()` 在对局/换备期间以 `dInfo.isFirst` 为准（`isFirst==true ⟺ 服务端座位 0`），修 MC 不发 `STOC_TYPE_CHANGE`、launcher `-d/-k` 使 `-c/-j` fallback 失效时 guest 被错判成 seat 0（`lastChainEvent` 阵营反、`ctrl` 输出 0）；`SEAT resolved seat=.. isFirst=.. selftype=.. launch=..` 可核对。另含前版时点四态 normal（默认）/座位坐标/wait_prompt/stall/看门狗；验收/历史见文末记录）
+> = **2026-11-27 17:09:18 / 6,336,000 B**，SHA256 `408C8C5A2B66F36CC267C9DF03B0E3D6C3628A66A22EACE0802E799766D20405`
+> （2026-11-27 **side_ok label 三态 + `changed` 版**：`/actions` 在 `sidePending` 时 `side_ok` label 三态（no changes / changed / counts mismatch），JSON 新增**顶格 `changed`**（`/side_swap` 成功→true、每个新窗口复位 false；与 `counts`/`sideError` 同级，不在 `actions[0]` 里）；**张数相等 ≠ 没换牌**。另含前版 SelfSeat（`isFirst` 判定）/时点四态 normal/座位坐标/wait_prompt/stall/看门狗；验收/历史见文末记录）
 > `/state.resume.reason` 在加载成功时返回 `"loaded"`，行为不变；22:23:28 已做过冒烟）。
 > 该版含重连基础能力：`GET /net`、自动 `/tip` 探活、`YGO_SUPPRESS_MODALS` 模态框抑制、
 > `resume-context-<port>.json` journal、`POST /leave`（详见 [RECONNECT-DESIGN.md](RECONNECT-DESIGN.md)、[reconnect-lab.md](reconnect-lab.md)）。
@@ -516,23 +516,25 @@ Bo3 每两局之间，客户端进入换备牌阶段。**控制驱动模式下�
 
 `/prompt` 同时带：`sidePending`、`sideSummary`（一行摘要）、`sideChooseBy`（如 `"act_id kind=side_ok id=0"`）、`sideError`。
 
-**`/actions` 在 `sidePending` 时的返回（`side_ok` label 三态 + `changed` 字段）**：
+**`/actions` 在 `sidePending` 时的返回（`side_ok` label 三态 + 顶格 `changed`）**：
 
 ```json
 {"seq":12,"curMsg":0,"awaiting":true,"sidePending":true,
  "actions":[{"id":0,"kind":"side_ok",
-             "label":"side deck changed (40/15/15); continue",
-             "changed":true,
-             "counts":{"main":40,"extra":15,"side":15},
-             "sideError":null}]}
+             "label":"confirm side deck (changed) and continue"}],
+ "changed":true,
+ "counts":{"main":40,"extra":15,"side":15},
+ "sideError":null}
 ```
+
+> **字段位置**：`changed`/`counts`/`sideError` 是 `/actions` 返回对象的**顶格字段**（与 `actions[]` 同级），**不在 `actions[0]` 元素里**；action 元素只有 `id/kind/label`（label 三态见下表）。
 
 | 字段 | 含义 |
 |---|---|
-| `label` | **三态文本**：① `keep side deck (no changes) and continue`（没换过）② `side deck changed (m/e/s); continue`（换过）③ `counts mismatch: fix ... before continue`（张数与 `pre` 不一致，不能 done） |
-| `changed` | **本次换备是否真的换过牌**（`side_swap` 成功过 → `true`）。**`counts` 相等 ≠ 没换牌**（换出 A 换入 B 时张数不变，只有 `changed` 能区分）——判断"我的换牌生效没有"用 `changed`，不要看 `counts` 是否等于 `pre` |
-| `counts` | 当前 `{main,extra,side}` 张数 |
-| `sideError` | `"counts must match"` 等校验错误；有值时**先修正张数再 `side_ok`** |
+| `label` | **三态文本**：① `keep side deck (no changes) and continue`（没换过）② `confirm side deck (changed) and continue`（换过）③ `counts mismatch: fix main/extra/side counts before confirming`（张数与 `pre` 不一致，不能 done） |
+| `changed`（顶格） | **本轮换备窗口内是否真的换过牌**（`/side_swap` 成功 → `true`；每个新换备窗口复位 `false`）。**`counts` 相等 ≠ 没换牌**（合法互换后 main/extra/side 仍守恒），判断"我的换牌生效没有"用 `changed` |
+| `counts`（顶格） | 当前 `{main,extra,side}` 张数 |
+| `sideError`（顶格） | `"counts must match"` 等校验错误；有值时**先修正张数再 `side_ok`** |
 
 > 旧版（≤ `2026-11-27 15:03:45`）`label` 是写死的 `"keep side deck (no changes) and continue"`（task-35/36 遗留字面量），即使已经换过牌也不变 → 与同 JSON 的 `counts` 矛盾，LLM 会误以为没生效而**重复换牌**（把 40/15/15 换重）。看到 `no changes` 但 `changed:true` = 旧版 label bug，升级即可；用 `changed` 判断。
 
@@ -1025,7 +1027,7 @@ $env:YGO_UI_ACTIONS='0'; powershell ... bridge\lan-run.ps1 -Games 1
 5. **链字段有 1 帧延迟**：`/state` 与 `/prompt` 的链字段来自 UI 线程快照；`chainStack[].forced` 恒 false、`type` 固定 `effect`。
 6. **UI 模式个别动作有 600ms 校验延迟**（点不中时才会走满）。
 7. **多效果卡默认点第 0 个 option**（可能不是最优效果）；`announce/counter/sort/sum` 是"安全默认"而非最优。
-8. **线上排位：能完整打完，但胜率依赖策略**：客户端/管线侧已实测可拿房→进房→选卡组→准备→完整对局→自然结算（LP_ZERO 等），并支持受控掉线后约 13s 重连回同房继续打；输局主要是 policy 保守（大量 `decline`/`to_bp`/`end`），不是管线卡死。**排位相关新字段（`/state.deckError`、`/state.isWin/isLoss/isDraw`、`/state.lpOrder`、`/state.pipeline.recentMsgs`、`/state.tpPending`+`/state.tpOptions`、`/actions` 的先/后攻动作 `kind:"tp"`+`index:1|2`、`/state.sidePending`、`/actions` 的换备牌动作 `kind:"side_ok"`（Bo3 每局之间，`id=0` → `btnSideOK`/`SendUpdateDeck`）、**`/state.side`（`available/pending/waiting/elapsedMs/waitingSeen/lastWaitMs/main/extra/side/counts/pre/limits/error`）+ `POST /side_swap`（真正换牌）+ `side_ok` 竞态修复**、**`/state.match`（`game`/`over`/`games[]`（含 `win`/`winnerSeat`/`reasonName`）/`gamesWonLocal`/`gamesWonOpp`/`lastWinnerLocal`/`lastReasonName`，配合 `control_match` 一句话报结果）**、`CHAIN raw` 等；Bo3 Game2/3 开局客户端会 `DUEL_START reset result state` 重置 `winPlayer/winReason`）只在客户端 `2026-11-27 15:03:45 / 6,335,488 B`（sha256 `33CF5166CD9A9E7380B03158AE684DB719F4553C2776FAFC897D526AD4A893AB`）及之后存在**；旧 exe 请先升级。详见 [`RANKED-REPORT.md`](RANKED-REPORT.md)。
+8. **线上排位：能完整打完，但胜率依赖策略**：客户端/管线侧已实测可拿房→进房→选卡组→准备→完整对局→自然结算（LP_ZERO 等），并支持受控掉线后约 13s 重连回同房继续打；输局主要是 policy 保守（大量 `decline`/`to_bp`/`end`），不是管线卡死。**排位相关新字段（`/state.deckError`、`/state.isWin/isLoss/isDraw`、`/state.lpOrder`、`/state.pipeline.recentMsgs`、`/state.tpPending`+`/state.tpOptions`、`/actions` 的先/后攻动作 `kind:"tp"`+`index:1|2`、`/state.sidePending`、`/actions` 的换备牌动作 `kind:"side_ok"`（Bo3 每局之间，`id=0` → `btnSideOK`/`SendUpdateDeck`）、**`/state.side`（`available/pending/waiting/elapsedMs/waitingSeen/lastWaitMs/main/extra/side/counts/pre/limits/error`）+ `POST /side_swap`（真正换牌）+ `side_ok` 竞态修复**、**`/state.match`（`game`/`over`/`games[]`（含 `win`/`winnerSeat`/`reasonName`）/`gamesWonLocal`/`gamesWonOpp`/`lastWinnerLocal`/`lastReasonName`，配合 `control_match` 一句话报结果）**、`CHAIN raw` 等；Bo3 Game2/3 开局客户端会 `DUEL_START reset result state` 重置 `winPlayer/winReason`）只在客户端 `2026-11-27 17:09:18 / 6,336,000 B`（sha256 `408C8C5A2B66F36CC267C9DF03B0E3D6C3628A66A22EACE0802E799766D20405`）及之后存在**；旧 exe 请先升级。详见 [`RANKED-REPORT.md`](RANKED-REPORT.md)。
 9. **被动判死（对手回合 60s eff + `NET silence diag`）**：对手长时间不出手时，客户端会按"对手回合 60s eff"推进判定，并在 `/net` 相关日志打 `NET silence diag`（链路静默诊断，不主动断线）；被动判死不是本仓库 policy 的行为，属客户端/服务端规则。`/net` 的 `alive`/`sinceLastStoc` 在静默期会持续增长——要区分"对手在思考（slow play）"和"对手掉线"，以 `NET silence diag` + `/net.probe` 的 `fails`/`rttMs` 判断；详见 `mycard-client/docs/CONTROL-API.md` 的 `/net` 一节。
 10. **控制驱动下 `STOC_REPLAY` 直接跳过（`replay: dialog skipped`）**：不会弹回放对话框、**不阻塞网络线程**（否则回放保存框会卡住后续 STOC）。**已 LAN 实测**（2026-11-13：双方各 2 次 `replay: dialog skipped (control-driven, no wait)`、`replay-save=0`、`stoc=23 stall=0`）；排位 LP_ZERO 结算场景同样走该路径（不再需要"未实测"假设）。若上线后出现结算后收不到后续包，先查这里。
 11. **prompt 空等 ~90s 会被服务端按 AFK `eof` 踢（MC 排位行为）；LAN srvpro 不踢 eof，而是 180s `TIMEOUT` 判负**（证据 `ranked/logs/eof-guard-validation.md`、`control-23776.log`）。`10:25:14` 版起默认 `YGO_PROMPT_AUTO_DEFAULT_MS=60000` 自动发保守默认动作兜底（45s 先打 `PROMPT idle warning`），可用 `/prompt.awaitingSinceMs` 看等待时长；`0`=关闭（不建议）。

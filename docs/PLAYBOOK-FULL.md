@@ -2,7 +2,7 @@
 
 > **读者**：要真正操作这套桥接去排位/局域网打牌的 LLM agent（以及维护它的工程师）。
 > **目标**：零歧义——每一步"做什么、调什么、返回什么、怎么判定成功/失败、失败怎么修"。
-> **当前客户端构建**：`2026-11-27 15:03:45 / 6,335,488 B`，SHA256 `33CF5166CD9A9E7380B03158AE684DB719F4553C2776FAFC897D526AD4A893AB`（`node doctor.mjs --client <exe> --strict-build` 可校验）。
+> **当前客户端构建**：`2026-11-27 17:09:18 / 6,336,000 B`，SHA256 `408C8C5A2B66F36CC267C9DF03B0E3D6C3628A66A22EACE0802E799766D20405`（`node doctor.mjs --client <exe> --strict-build` 可校验）。
 > **权威性**：本文是操作流程的权威；字段级契约见 [`MCP-INTERFACE.md`](MCP-INTERFACE.md)，排位实战记录见 [`RANKED-REPORT.md`](RANKED-REPORT.md)，精简单页见 [`MATCH-PLAYBOOK.md`](MATCH-PLAYBOOK.md)。
 > **本文所有示例字段名都按当前客户端真实输出**（可对照 `ranked/logs/playbook-samples/` 下的真实采样）。
 
@@ -376,10 +376,11 @@ control_act({ seq: <当前 seq>, hex: "000201" })
 **关键**：**只有双方都 `side_ok`，服务器才会发下一局 `DUEL_START`**。一端确认后另一端没动，你会一直停在 `waiting`。
 
 **换备纪律（`side_ok` label / `changed`）**：
-- 换备前先看 `/actions` 里 `side_ok` 的 **`changed`** 和 **`counts`**：`changed:true` = 本次真的换过牌；**`counts` 相等 ≠ 没换牌**（换出 A 换入 B 张数不变）。
-- `label` 三态：`keep side deck (no changes) and continue`（没换过）/ `side deck changed (m/e/s); continue`（换过）/ `counts mismatch: fix ... before continue`（张数不对，先修）。
+- `/actions` 在 `sidePending` 时：action 元素只有 `id/kind/label`；**`changed`/`counts`/`sideError` 是返回对象的顶格字段**（与 `actions[]` 同级）。
+- 换备前先看 **`changed`** 和 **`counts`**：`changed:true` = 本轮真的换过牌；**`counts` 相等 ≠ 没换牌**（合法互换后张数仍守恒）。
+- `label` 三态：`keep side deck (no changes) and continue`（没换过）/ `confirm side deck (changed) and continue`（换过）/ `counts mismatch: fix main/extra/side counts before confirming`（张数不对，先修）。
 - **若看到 `no changes` 但 `changed:true`**：旧版 label 写死 bug（≤ `2026-11-27 15:03:45`，task-35/36 遗留）→ 升级即可；**用 `changed` 判断，不要据此重复换牌**。
-- **重复 `control_side_move` 会把 40/15/15 换重**（比如把已换出的牌再换一次），一旦 `changed`/`counts` 显示已生效就停手；`sideError:"counts must match"` 时先按 `counts/limits` 修回再 `side_ok`。
+- **重复 `control_side_move` 会把 40/15/15 换重**（比如把已换出的牌再换一次），`changed:true` 后不要再重复换同一张；`sideError:"counts must match"` 时先按 `counts/limits` 修回再 `side_ok`。
 
 **LAN 特例**：`YGO_SIDE_AUTO=1` 可让客户端自动确认（测试用）。
 

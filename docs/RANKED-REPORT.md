@@ -411,9 +411,16 @@
 
 - **现象**：`/actions` 在换备阶段只有一条 `side_ok`，`label` 永远写死 `"keep side deck (no changes) and continue"`（task-35/36 遗留字面量），**即使已经 `/side_swap` 换过牌也不变**——与同一 JSON 的 `counts` 矛盾；LLM 因此以为换牌没生效而**重复换牌**（把 40/15/15 换重）。
 - **根因**：label 是写死的字符串常量，没有跟随 `side_move` 的状态；且"没换牌"无法用 `counts` 判断（换出 A 换入 B 张数不变）。
-- **修复（poc 出 build 中，指纹待定）**：
-  - `label` 改**三态**：`keep side deck (no changes) and continue`（没换过）/ `side deck changed (m/e/s); continue`（换过）/ `counts mismatch: fix ... before continue`（张数与 `pre` 不一致，不能 done）；
-  - `/actions` 的 `side_ok` JSON 新增 **`changed`** 字段（`side_swap` 成功过 → `true`），并带 `counts`、`sideError`；
+- **修复（`2026-11-27 17:09:18 / 6,336,000 / 408C8C5A…`）**：
+  - `label` 改**三态**：`keep side deck (no changes) and continue`（没换过）/ `confirm side deck (changed) and continue`（换过）/ `counts mismatch: fix main/extra/side counts before confirming`（张数与 `pre` 不一致，不能 done）；
+  - `/actions` 返回对象新增**顶格 `changed`**（`/side_swap` 成功 → `true`；每个新换备窗口复位 `false`），`counts`/`sideError` 与它同级（**不在 `actions[0]` 元素里**）；
   - **`counts` 相等不代表没换牌，用 `changed` 判断**；`sideError:"counts must match"` 时先修正张数再 `side_ok`。
-- **文档**：`MCP-INTERFACE.md` §5.5 加 `sidePending` 时 `/actions` 返回示例 + label 三态/`changed` 语义 + 旧版 bug 说明；`PLAYBOOK-FULL.md` §3.9 加换备纪律（先看 `changed`/`counts`；`no changes` 但 `changed:true` = 旧版 → 升级；别重复 `side_move`）。
-- **验证**：待 bot-scout（PASS 后本节补证据）。
+- **文档**：`MCP-INTERFACE.md` §5.5 加 `sidePending` 时 `/actions` 返回示例 + label 三态/顶格 `changed` 语义 + 旧版 bug 说明；`PLAYBOOK-FULL.md` §3.9 加换备纪律（先看 `changed`/`counts`；`no changes` 但 `changed:true` = 旧版 → 升级；别重复 `side_move`）。
+- **验证（bot-scout `ranked/logs/side-ok-label-validation.md`，`side-ok-20261127-171659/`）6 条 PASS**：
+  1. 初始：`label="keep side deck (no changes) and continue"`、`changed:false`、`sideError:null`、`counts 40/15/15 == pre`；
+  2. 合法互换（main↔side 各 1）：`label="confirm side deck (changed) and continue"`、`changed:true`、`counts` 仍 40/15/15==pre、`sideError:null`（**计数守恒但 `changed` 正确为 true**）；
+  3. 单向 main→side 1 张：`label="counts mismatch: fix main/extra/side counts before confirming"`、`sideError:"counts must match"`、`counts 39/15/16`；
+  4. 补回守恒：`changed:true`、无 error；
+  5. 双侧 `side_ok` → game2 `inDuel:true`；
+  6. game2 surrender 后的新窗口：`changed:false` 复位；全程 `retry=0`、无 eof。
+  - 注：**`changed` 是 `/actions` 返回对象的顶格字段**（实测确认与 `actions[]` 同级，不在 action 元素里）。
