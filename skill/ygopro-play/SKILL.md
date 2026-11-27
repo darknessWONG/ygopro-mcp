@@ -97,8 +97,16 @@ while not state.match.over:
    推荐节奏：**开局 `avail` → 对方回合 `timeLeft` 掉得快（<150）或 prompt 刷屏 → `ignore` 止损 → ① 轮到自己第一件事就是切回 `avail`。**
    **🔴 最容易犯的错：切了 `ignore` 忘记切回 `avail`** —— 之后你**自己**的「抽到时→特召」等可选诱发会被客户端自动放弃，白丢展开（2026-11-25 实测吃亏）。
    **把「己方回合开始 → 切 avail」当成一条固定动作**，跟自己回合第一件事绑定。
-   **注意**：`/ui?chain=` **有延迟** —— 返回里 `desired:"ignore"` 但 `chainModeName` 还是旧值且 `applyPending:true`，**下一帧才生效**，别立刻依赖回读值。
+   **注意**：`/ui?chain=` **有延迟，而且有生效条件**（2026-11-26 实测确认）：
+   - 返回里 `desired:"ignore"` 但 `chainModeName` 仍是 `avail` + `applyPending:true`
+   - **必须先把「当前 pending 的那个 prompt 答掉」，`ignore` 才真正落地**（连发 4 次也不会提前生效）
+   → 所以**别以为"切了没反应"是失败**；切完先把手上的 prompt 答一次，再看 `chainModeName`。
    （MCP 没有对应工具，只能走 HTTP `/ui?chain=`；可用 `control_state().ui.chainMode` 读当前值。）
+   **🔴 `ignore` 的两个致命副作用（2026-11-26 实测，有客户端日志）**：
+   - **① 它不抑制 `curMsg 16 (SELECT_CHAIN)`** —— 即使 `chainModeName=ignore`，自由时点效果（如本家的 `斯奎兹`/`落胤与圣女`/`辉煌`）的窗口**仍反复弹给 LLM**（同一窗口弹过 6+ 次）。所以 `ignore` **不能**解决"窗口反复"的调用量问题。
+   - **② 它会连"我方自己的可选诱发"一起自动放弃** —— 日志里是 `CHAIN client auto-decline` + `PROMPT skip auto-handled`，**本家的「抽到时→特召」「西艾萝抽卡」会被直接跳过，等于白丢一整个回合**。
+   → **纪律：`ignore` 只能在你"确定这回合不需要任何自家诱发"时短暂使用**（例如对方回合收尾），**己方回合第一步必须切回 `avail` 并确认 `chainModeName=avail`**。
+   → **不要指望 `ignore` 把调用数压下来**；真正的减调用手段是「同一窗口第 2 次重复就一次性 decline 到下一事件」「必发效果直接按」「`to_bp` 失败重取一次」。
 
 10. **🔴 自由时点的窗口会"重发"，能把预算打爆**（2026-11-25 实测：单回合 **44 次**调用，预算 12–14）
    典型：**速攻魔法**（如 `落胤与圣女`）在自由时点每给一次优先权就弹一次 → decline→再弹→再 decline，循环烧往返。
@@ -141,7 +149,10 @@ while not state.match.over:
 | 怀疑掉线（长回合/对手长考） | 每 15–30s `control_net` | `alive=false` 或 `state=confirmed_dead/disconnected` → 中止重排；`idle-no-packet`=被动静默判死、`disconnected`=socket 断；`probe_failed`/`fails` 增长不算断线 |
 | 看起来没动静、但不像掉线 | `/net.stallMs` / `oppClockFresh` / `oppTimeLeft` | `stallMs>120000 && oppClockFresh=false` = **对方客户端/服务端卡住** → **`control_leave` 离桌重排（优先于 surrender）**；`oppClockFresh=true` 是对手长考，继续等（日志 `NET STALL`，`YGO_STALL_WARN_MS` 默认 120000；判读以 `oppClockFresh` 为准） |
 | `eof` 前有 `PROMPT publish`、~88s 无 `SEND RESPONSE` | 未答 AFK（MC 排位 ~90s；LAN srvpro 是 180s TIMEOUT） | `10:25:14` 版 guard 60s 自动兜底；`/prompt.awaitingSinceMs` 看等待长度；LLM 60s 内必答 |
-| **排队突然连续 `409`**（之前一直是正常长轮询，某刻起全是 409） | **同账号并发 match 请求** —— 起了两个 `queue-loop`，第二个把第一个顶成 409。**不是服务端故障、不是空池** | 查 `Get-Process node` 的 `queue-loop` 命令行，**只留 1 个**；多进程还会让房间 JSON 落在别人 stdout 里拿不到 |
+| **排队突然连续 `409`**（之前一直是正常长轮询，某刻起全是 409） | **① 先查并发**：起了两个 `queue-loop`，第二个把第一个顶成 409。**不是服务端故障、不是空池** | 查进程只留 1 个；多进程还会让房间 JSON 落在别人 stdout 里拿不到 |
+| **确认只有 1 个队列，`409` 仍然不停**（尤其刚离开过"对手没进来的空房"之后） | **② 服务端 `playingPlayerPool` 残留**：我们被记在那个"创建了但从未开始"的房间里，客户端重启**清不掉**服务端状态 | **组合拳（2026-11-26 实测有效）**：① 杀 queue-loop；② `POST /leave`；③ **静置 ≥120 秒**（只等 60 秒不够，实测 409 连续 443 秒不停）；④ 重启客户端；⑤ 重排 → 恢复正常长轮询 |
+| **进房后对手迟迟不来**（`playerCount<2`、`bothReady:false`） | 空房：配对成功但对手侧掉了 | **≥45 秒就 `control_leave` 重排**，别空等 60 秒以上（可用 `bridge\empty-room-guard.mjs`：45 秒守门，自动 leave 并以退出码 5 返回，调用方立刻重排）。**⚠️ 它的生命周期要足够长**：实测 804 秒就超时退出，而房间 20 分钟后才配上 → **没赶上，白挂**。要么把生命周期设到 **≥30 分钟**，要么**在房间 JSON 出现的那一刻才启动它** |
+| **`control_join` 报 `connect-timeout`（客户端日志 `NETMSG id=1400 "无法连接到主机。"`），但 DNS 解析成功（`join: resolved -> 0x…`）** | **游戏服务器不可达**（TCP 层连不上，服务端侧宕机/维护），**不是房间失效、不是 409、不是我们太慢**（autojoin t+0 就 join 也照样失败） | **立刻停排**（配对服务还会给房间 JSON，但指向的服务器连不上，排了也进不去，还容易再搞出 `playingPlayerPool` 残留）。恢复判断：`Test-NetConnection -ComputerName tiramisu.moenext.com -Port 8911 -InformationLevel Quiet` 返回 `True` 再重排；**别拿排队次数试探服务器** |
 | **排队 `/ygopro/match` 稳定 `400`**（body 空、`srv:nginx`、退避 5 分钟后单发仍 400） | **服务端侧拒斥**。已排除：凭证（`authUser` 200）、限流、burst、我们代码（Basic 头 base64 解码回原文一致） | **停排别空烧**，把首次出现时间/次数交给维护者。诊断脚本 `$ROOT\bridge\probe2.mjs` / `probe3.mjs` |
 | **`control_join` 连上 ~80ms 就 `STOC_ERROR_MSG code=0x00090000`（`errorCode:589824`）、`joined:false`** | **房间已失效/被回收**（MC 房间是一次性的，配对后几十秒内不进就死）。不是密码错、不是超时 | **立刻重排，别反复 join 同一个房**；根因多半是"配对→进房"之间有人/B 的往返延迟 → 见 §7.5 |
 | **`/state.errorMsg:1` + `errorCode:589824` 在整场健康对局里一直挂着**（`net.state:"healthy"`、prompt 正常） | `errorCode/errorMsg` **粘滞**（进房失败后不清），**不代表当前有错误** | 判当前是否出错看 `awaiting`/`prompt`/`net.state`，**别看 `errorCode`**；只有它**刚变化**时才有诊断意义 |
