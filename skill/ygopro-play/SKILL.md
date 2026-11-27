@@ -21,6 +21,8 @@ description: 用 MCP 控制层真实操作 YGOPro 客户端打牌（MC 线上排
 7. **整场胜负只信 `control_match`**，不要用 `winPlayer` 推。
 8. **EOF guard（10:25:14 版起）**：prompt 空等 ~90s 会被 MC 排位按 AFK `eof` 踢；`YGO_PROMPT_AUTO_DEFAULT_MS`（默认 60000，0=关）45s 打 `PROMPT idle warning`、60s 自动发保守默认（`PROMPT auto-default ... (idle guard, LLM silent)`）。**超 60s 没答会被 guard 顶掉（保守动作），但别依赖它——正常要快**；`/prompt.awaitingSinceMs` 可看等待时长。
 9. **座位坐标（11-26 10:26:12 版起）**：`ctrl`/`isMine` 全部是**服务端座位坐标**，恒有 **`isMine == (ctrl == mySeat)`**——判敌我只用 `isMine` 或 `ctrl==mySeat`，**不要用 `ctrl` 猜**。`hand[0]` 是**本地手牌**（本地视角）、`myPlayer` 恒 0 只是索引视角（`hand[1]`=对手）。`places[]` 的 `ctrl` 是服务端座位、`ctrlRaw` 是本地原值，响应仍用 `bit`。旧版（≤11-23 14:53:57）在 **guest（mySeat=1）** 时会把双方阵营整体写反（自己的卡标「对手」、`isMine:false`），升级即可。
+   - **`mySeat` 怎么来的（11-27 15:03:45 版起）**：对局/换备期间取 **`dInfo.isFirst`**（`isFirst==true` ⟺ 服务端座位 0，guest 为 1）；大厅才用 `selftype`。原因：**MC 不保证发 `STOC_TYPE_CHANGE`**（guest 的 `selftype` 可能是 0），且 MC launcher 用 `-d/-k` 让 `-c/-j` fallback 失效 → **旧版 guest 的 `mySeat` 会错成 0**。读 `control_state().mySeat`；客户端日志有 `SEAT resolved seat=%d isFirst=%d selftype=%d launch=%d` 可核对。
+   - 相关旧 bug（11-27 15:03:45 修复）：guest 自己发动的卡，`/state.lastChainEvent` 文本会写成「**对手**发动 [...]」（同一时刻 `chainStack[0].isMine` 却是 true，因为 isMine 在 `mySeat` 错时恰好仍对）；升级后 guest 看到「我方发动」、host 看到「对手发动」。
 10. **时点四态（11-27 11:04:58 版起）**：`chainMode` 取值与**官方语义**——
    - `0 all` = **全部时点**：任何时候都给窗口，不管有没有可用动作
    - `1 avail` = **全部可用时点**：只要有合法动作就询问
@@ -115,6 +117,16 @@ while not state.match.over:
    - `/ui?chain=all|avail|ignore|normal` 四值都支持；`desiredChainMode` 立即变，`chainMode/三布尔`（real）**≤1s 刷新**（旧版空闲 guest 不刷新，已修）。
    - 代码实现（脚注）：`duelclient.cpp:1886` auto-decline 门——all 永不放弃；avail 仅 `count==0`；normal 在 `count==0 || specount==0`；ignore 无条件（forced 除外）。`count`=本窗口可发动数，`specount`=spec/常用触发数（`0x7f`=select-trigger 窗口）。
    - 读当前值用 `control_state().ui.chainMode` / `/ui`（`/state.chainMode` 与之一致）。
+   **🔴 `normal(3)` 并不能解决"自由时点可选效果反复弹窗"（2026-11-27 实测，单场 **140 次**调用，目标 ≤40）**
+   `normal` 只是"`avail` 再过滤**非常用询问**"，**不会**抑制"自由时点可选效果"的窗口。
+   本卡组（Raise Moon）有 **16+ 张自由时点可选效果**（`库露雪`/`斯奎兹`/`西艾萝`/`辉煌`/`落胤与圣女`），
+   **每给一次优先权就重新弹一次**；碰上速攻魔法多的对手（如 `神碑`/Runick）更被放大 ——
+   它的速攻每回合都能发，**每个动作之间都插一个 chain 窗口**，一轮 decline 6–10 次，**连"结束回合"都要先 decline 掉窗口**。
+   **实测花费结构：约 65% 是纯 decline 窗口。**
+   → **这是结构性的，靠"少思考/少动作"解决不了。** 对策只有三条：
+   ① 对方回合临时切 `ignore(2)`（实测省约 1/3 调用），**轮到自己立刻切回 `normal(3)`**；
+   ② 同一窗口第 2 次重复就一次性 decline 到底，别反复犹豫；
+   ③ 向桥接维护者提：**"同一 turn 内同一 code 只问一次"的记忆抑制**（若实现，调用数可直接砍约 60%）。
    **🔴 `ignore` 的两个致命副作用（2026-11-26 实测，有客户端日志）**：
    - **① 它不抑制 `curMsg 16 (SELECT_CHAIN)`** —— 即使 `chainModeName=ignore`，自由时点效果（如本家的 `斯奎兹`/`落胤与圣女`/`辉煌`）的窗口**仍反复弹给 LLM**（同一窗口弹过 6+ 次）。所以 `ignore` **不能**解决"窗口反复"的调用量问题。
    - **② 它会连"我方自己的可选诱发"一起自动放弃** —— 日志里是 `CHAIN client auto-decline` + `PROMPT skip auto-handled`，**本家的「抽到时→特召」「西艾萝抽卡」会被直接跳过，等于白丢一整个回合**。
@@ -164,6 +176,8 @@ while not state.match.over:
 | `eof` 前有 `PROMPT publish`、~88s 无 `SEND RESPONSE` | 未答 AFK（MC 排位 ~90s；LAN srvpro 是 180s TIMEOUT） | `10:25:14` 版 guard 60s 自动兜底；`/prompt.awaitingSinceMs` 看等待长度；LLM 60s 内必答 |
 | **排队突然连续 `409`**（之前一直是正常长轮询，某刻起全是 409） | **① 先查并发**：起了两个 `queue-loop`，第二个把第一个顶成 409。**不是服务端故障、不是空池** | 查进程只留 1 个；多进程还会让房间 JSON 落在别人 stdout 里拿不到 |
 | **确认只有 1 个队列，`409` 仍然不停**（尤其刚离开过"对手没进来的空房"之后） | **② 服务端 `playingPlayerPool` 残留**：我们被记在那个"创建了但从未开始"的房间里，客户端重启**清不掉**服务端状态 | **组合拳（2026-11-26 实测有效）**：① 杀 queue-loop；② `POST /leave`；③ **静置 ≥120 秒**（只等 60 秒不够，实测 409 连续 443 秒不停）；④ 重启客户端；⑤ 重排 → 恢复正常长轮询 |
+| **`control_side_done` 返回的 label 恒为 `"keep side deck (no changes) and continue"`**，即使实际换过牌 | **label 是静态文案，不反映实际换备内容**（2026-11-26 / 11-27 两次复现，仍未修） | **别拿这个 label 判断换备有没有生效**；改看 `control_state().side.counts`（main / extra / side 三个数）是否守恒、是否符合预期 |
+| **`lastChainEvent` 文本把敌我写反**（写成「对手发动 [我的卡]」），但同一时刻 `chainStack[0].isMine === true` | **结构化字段已修，文本渲染没跟上**（2026-11-27 实测） | **判敌我只看 `isMine` 或 `ctrl == mySeat`**，不要读 `lastChainEvent` 的文字 |
 | **进房后对手迟迟不来**（`playerCount<2`、`bothReady:false`） | 空房：配对成功但对手侧掉了 | **≥45 秒就 `control_leave` 重排**，别空等 60 秒以上（可用 `bridge\empty-room-guard.mjs`：45 秒守门，自动 leave 并以退出码 5 返回，调用方立刻重排）。**⚠️ 它的生命周期要足够长**：实测 804 秒就超时退出，而房间 20 分钟后才配上 → **没赶上，白挂**。要么把生命周期设到 **≥30 分钟**，要么**在房间 JSON 出现的那一刻才启动它** |
 | **`control_join` 报 `connect-timeout`（客户端日志 `NETMSG id=1400 "无法连接到主机。"`），但 DNS 解析成功（`join: resolved -> 0x…`）** | **游戏服务器不可达**（TCP 层连不上，服务端侧宕机/维护），**不是房间失效、不是 409、不是我们太慢**（autojoin t+0 就 join 也照样失败） | **立刻停排**（配对服务还会给房间 JSON，但指向的服务器连不上，排了也进不去，还容易再搞出 `playingPlayerPool` 残留）。恢复判断：`Test-NetConnection -ComputerName tiramisu.moenext.com -Port 8911 -InformationLevel Quiet` 返回 `True` 再重排；**别拿排队次数试探服务器** |
 | **排队 `/ygopro/match` 稳定 `400`**（body 空、`srv:nginx`、退避 5 分钟后单发仍 400） | **服务端侧拒斥**。已排除：凭证（`authUser` 200）、限流、burst、我们代码（Basic 头 base64 解码回原文一致） | **停排别空烧**，把首次出现时间/次数交给维护者。诊断脚本 `$ROOT\bridge\probe2.mjs` / `probe3.mjs` |
