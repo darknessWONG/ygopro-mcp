@@ -400,18 +400,20 @@ body = PromptJson(g_shared);
 
 | 字段 | 说明 |
 |---|---|
-| `chainMode` / `chainModeName` | **真实**连锁时点（从控件布尔反推）：`0=all` / `1=avail` / `2=ignore` / **`3=normal`（全不按；对局默认）** |
-| `alwaysChain` / `chainWhenAvail` / `ignoreChain` | 三个真实 bool（all / avail / ignore）；**normal = 三个全 false** |
+| `chainMode` / `chainModeName` | **真实**连锁时点（从控件布尔反推）：`0=all（全部时点）` / `1=avail（全部可用时点）` / `2=ignore（无视所有时点）` / **`3=normal（常用时点，对局默认）`** |
+| `alwaysChain` / `chainWhenAvail` / `ignoreChain` | 三个真实 bool（all / avail / ignore 的按钮状态）；**`normal` = 三个全 false**（实现细节：第 4 态没有单独按钮） |
 | `desiredChainMode` / `appliedChainMode` / `applyPending` | 想要的 / 已应用的 / 是否待应用；`desiredChainMode` 同样支持 `3`（normal） |
 
-**时点四态（`normal` 已正式化，默认态）**：
+**时点四态（官方行为语义；`normal` 为默认）**：
 
-| 值 | 名称 | 三按钮 | 自动放弃（auto-decline）门 | 说明 |
-|---|---|---|---|---|
-| 0 | `all` | 显示时点 | 永不自动放弃 | 每个连锁窗口都问 |
-| 1 | `avail` | 可用时点 | 仅 `count==0` 时放弃 | 只问"有效果可发"的窗口 |
-| 2 | `ignore` | 忽略时点 | 无条件放弃 | 完全不问 |
-| **3** | **`normal`** | **三按钮全不按（客户端冷启动默认）** | **`count==0 \|\| specount==0` 时放弃** | **只在 spec/select-trigger 窗口询问**；进入对局默认此态（旧版 `/ui` 曾把该态误报为 `avail`） |
+| 值 | 名称 | 行为语义 |
+|---|---|---|
+| 0 | **`all`**（全部时点） | 任何时候都给窗口，**不管有没有可用动作** |
+| 1 | **`avail`**（全部可用时点） | **只要有合法动作就询问** |
+| 2 | **`ignore`**（无视所有时点） | 不弹可选窗口、自动放弃；**但不会无视部分诱发效果**（强制/必发类仍会处理） |
+| **3** | **`normal`**（常用时点，**默认**） | **`avail` 的基础上再过滤掉一些非常用的询问**（只问 spec/select-trigger 类窗口） |
+
+> 实现对应（脚注，仅供排障）：auto-decline 门在客户端 `duelclient.cpp:1886`——`all` 永不放弃；`avail` 仅 `count==0`；`normal` 在 `count==0 || specount==0`；`ignore` 无条件（`forced` 除外）。旧版 `/ui` 曾把 `normal` 误报为 `avail`（≤11-23 14:53:57）。
 
 | 其他字段 | 说明 |
 |---|---|
@@ -419,7 +421,7 @@ body = PromptJson(g_shared);
 | `windows[]` | 17 个窗口的 `name/visible/rect{l,t,r,b}/x,y,w,h/textLen`（`textLen` 仅 `wMessage/wACMessage/wQuery` 有值，其余 -1；有正文时额外带 `text`（≤120 字）） |
 | `windowsVisible[]` | 可见窗口名字数组（快速判空） |
 
-> auto-decline 的判定在客户端 `duelclient.cpp:1886`（`count==0 || specount==0` 时放弃；`avail` 只看 `count==0`；`ignore` 无条件；`all` 永不）。`normal` 与 `avail` 的关键差异是**多了 `specount==0` 条件**，因此普通诱导窗口不会打扰、只保留 spec/select-trigger 窗口。
+> auto-decline 的判定在客户端 `duelclient.cpp:1886`（`count==0 || specount==0` 时放弃；`avail` 只看 `count==0`；`ignore` 无条件；`all` 永不）。`normal` 与 `avail` 的关键差异是**多了 `specount==0` 条件**，因此普通非常用询问会被过滤、只保留 spec/select-trigger 窗口（行为定义见上表）。
 
 **设置与生效时机（`11:04:58` 版）**：
 - 设置：`GET /ui?chain=all|avail|ignore|normal`（或 MCP 无对应工具时直接调 HTTP）；写 `desiredChainMode`。

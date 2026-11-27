@@ -461,7 +461,7 @@ control_act({ seq: <当前 seq>, hex: "000201" })
 | `isWin`/`isLoss`/`isDraw` | 本地视角胜负 | `false`/`false`/`false` → 一真 |
 | `winReason`/`winReasonName` | 原始原因/名字 | `-1/UNKNOWN` → `1/LP_ZERO` |
 | `match` | 整场 Bo3 结果（见 4.2） | 见下 |
-| `chainMode` | 连锁时点（4 态）：`0=all`（显示时点）/`1=avail`（可用时点）/`2=ignore`（忽略）/`3=normal`（三按钮全不按，**对局默认**） | `3`（`normal`）→ `1`（`avail`，被策略改过） |
+| `chainMode` | 连锁时点（4 态）：`0=all（全部时点）`/`1=avail（全部可用时点）`/`2=ignore（无视所有时点）`/`3=normal（常用时点，**对局默认**）` | `3`（`normal`）→ `1`（`avail`，被策略改过） |
 | `seq`/`awaiting` | prompt 序号/是否等你响应 | `0/false` → `5/true` |
 | `sidePending`/`tpPending` | 换备/先后攻挂起 | `false`/`false` |
 | `deckMain`/`deckExtra` | 卡组张数 | `0` → `40/15` |
@@ -548,7 +548,7 @@ control_act({ seq: <当前 seq>, hex: "000201" })
 
 ### 4.7 `/ui`
 
-`chainMode`/`chainModeName`（**4 态**：0=all / 1=avail / 2=ignore / **3=normal（三按钮全不按，默认）**；`normal` 的 auto-decline 门是 `count==0 || specount==0`，`duelclient.cpp:1886`）、`alwaysChain`/`chainWhenAvail`/`ignoreChain`（原始 bool；normal=全 false）、`desiredChainMode`/`appliedChainMode`/`applyPending`（desired 支持 3）、`uiCleanupCount`、`popupMask`、`popups:{posSelect,options,cardSelect,cmdMenu,message}`、`windows`/`windowsVisible`（可见窗口名）。
+`chainMode`/`chainModeName`（**4 态行为语义**：`0=all` 全部时点、任何时候都给窗口；`1=avail` 全部可用时点、有合法动作就询问；`2=ignore` 无视所有时点、不弹可选窗口自动放弃但强制/必发诱发仍处理；**`3=normal` 常用时点（默认）**、在 avail 基础上再过滤非常用询问、只问 spec/select-trigger 类窗口）、`alwaysChain`/`chainWhenAvail`/`ignoreChain`（原始 bool；normal=全 false）、`desiredChainMode`/`appliedChainMode`/`applyPending`（desired 支持 3）、`uiCleanupCount`、`popupMask`、`popups:{posSelect,options,cardSelect,cmdMenu,message}`、`windows`/`windowsVisible`（可见窗口名）。机制脚注：auto-decline 门 `duelclient.cpp:1886`（all 永不 / avail 仅 `count==0` / normal `count==0||specount==0` / ignore 无条件但 forced 除外）。
 
 ### 4.8 `/lobby`、`/chat`、`/msg`、`/actions`
 
@@ -602,7 +602,7 @@ control_act({ seq: <当前 seq>, hex: "000201" })
 ### 6.1 动作节奏表
 
 > **启动客户端前的硬性配置**：`YGO_NET_DEAD_SILENCE_MS` 用**默认 60000** 即可（最多 120000）；**不要再长期设 600000**（真掉线 10 分钟才发现；probe 误判已修、看门狗 `clockFresh` 已修）。`17:33:31` 版起 `/net` 有 `ourTurn/oppTurn/timeLeft/clockFresh`，客户端 `net.heartbeat` 每 15s 打一条。旧 exe（默认 10s）才需要 600000。`10:25:14` 版另有 EOF guard：`YGO_PROMPT_AUTO_DEFAULT_MS=60000` / `YGO_PROMPT_IDLE_WARN_MS=45000`（默认即推荐值）。
-> **时点模式**：`YGO_CHAIN_MODE` 默认 **`normal`**（三按钮全不按；旧版默认 `avail`）。4 态：`all`/`avail`/`ignore`/`normal`；进对局自动应用、之后自愈重设（4 态比较）。`normal` 的 auto-decline 门是 `count==0 || specount==0`（`duelclient.cpp:1886`）——只在 spec/select-trigger 窗口问你，普通诱导窗口不打扰；想"每个窗口都问"设 `all`，想"完全不问"设 `ignore`。
+> **时点模式**：`YGO_CHAIN_MODE` 默认 **`normal`**（旧版默认 `avail`）。4 态行为语义——**`all`（全部时点）**=任何时候都给窗口、不管有没有可用动作；**`avail`（全部可用时点）**=只要有合法动作就询问；**`ignore`（无视所有时点）**=不弹可选窗口、自动放弃，但**不会无视强制/必发类诱发效果**；**`normal`（常用时点，默认）**=在 avail 基础上再过滤非常用询问、只问 spec/select-trigger 类窗口。进对局自动应用、之后自愈重设（4 态比较）。机制脚注：auto-decline 门 `duelclient.cpp:1886`（all 永不 / avail 仅 `count==0` / normal `count==0||specount==0` / ignore 无条件但 forced 除外）。
 > **切时点**：`/ui?chain=all|avail|ignore|normal` → `desiredChainMode` 立即变；`real` 字段（`chainMode/chainModeName/三 bool`）在 apply 后**下一帧/≤1s** 刷新（`11:04:58` 版修好 guest 空闲 readback 旧值）；`/ui` 与 `/state.chainMode` 应一致，`applyPending=false` 表示已落地。
 
 | 动作 | 建议间隔/超时 | 说明 |

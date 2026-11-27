@@ -369,14 +369,20 @@
 ## 19. 2026-11-27 时点四态 `normal` + 默认 `normal`
 
 - **背景（人工观察）**：`/ui` 的三按钮状态实际存在**第 4 态：三按钮全不按**（客户端冷启动默认），但旧版 `/ui` 把它**误报为 `avail`**（`chainMode:1`）；旧文档只记录 `0/1/2` 三态、`YGO_CHAIN_MODE` 默认 `avail`。
+- **四种时点的正式定义（用户口径）**：
+
+| 值 | 名称 | 行为语义 |
+|---|---|---|
+| 0 | **all**（全部时点） | 任何时候都给窗口，**不管有没有可用动作** |
+| 1 | **avail**（全部可用时点） | **只要有合法动作就询问** |
+| 2 | **ignore**（无视所有时点） | 不弹可选窗口、自动放弃；**但不会无视部分诱发效果**（强制/必发类仍会处理） |
+| 3 | **normal**（常用时点，**默认**） | **在 avail 的基础上再过滤掉一些非常用的询问**（只问 spec/select-trigger 类窗口） |
+
 - **修复（`2026-11-27 11:04:58 / 6,334,976 / C1FBADF9…`）**：
-  - `chainMode` 正式扩为 **4 态**：`0=all(显示时点) / 1=avail(可用时点) / 2=ignore(忽略时点) / 3=normal(三按钮全不按)`；`chainModeName` 对应；
+  - `chainMode` 正式扩为 **4 态**：`0=all（全部时点）/ 1=avail（全部可用时点）/ 2=ignore（无视所有时点）/ 3=normal（常用时点，默认）`；`chainModeName` 对应；
   - **进入对局默认 `normal`**（不再默认 `avail`）；`desiredChainMode` 也支持 `3`；apply/self-heal 按 **4 态**比较（旧版 3 态比较会把 normal 误判成 avail 而"纠正"回去）；
-  - `YGO_CHAIN_MODE=all|avail|ignore|normal`（默认 `normal`）；保留 `alwaysChain/chainWhenAvail/ignoreChain` 原始布尔（normal = 三个全 false）。
-- **`normal` 与 `avail` 的功能差异**（auto-decline 门，`duelclient.cpp:1886`）：
-  - `normal`：`count==0 || specount==0` 时自动放弃 → **只在 spec/select-trigger 窗口询问**；
-  - `avail`：仅 `count==0` 时放弃；
-  - `ignore`：无条件放弃；`all`：永不放弃。
+  - `YGO_CHAIN_MODE=all|avail|ignore|normal`（默认 `normal`）；保留 `alwaysChain/chainWhenAvail/ignoreChain` 原始布尔（normal = 三个全 false，实现细节）。
+- **实现对应（脚注，仅供排障）**：auto-decline 门在 `duelclient.cpp:1886`——`all` 永不放弃；`avail` 仅 `count==0`；`normal` 在 `count==0 || specount==0`；`ignore` 无条件（`forced` 除外）。
 - **文档**：`MCP-INTERFACE.md` `/ui` 字段表 + 时点四态表 + env；`PLAYBOOK-FULL.md` §4 字段表、启动配置（`YGO_CHAIN_MODE` 默认 normal）、§6.1 时间表"时点四态"行；README 更新记录。
 - **验证（bot-scout `ranked/logs/chain-mode-normal-validation.md`，最终 build `C1FBADF9`）4 组 PASS**：
   1. **进局默认 normal（双侧）**（`chain-mode-20261127-110632/`）：`/ui` = `chainMode=3/name=normal`、三 bool 全 false、`desired=applied=3`、`applyPending=false`；host + guest 均是。
