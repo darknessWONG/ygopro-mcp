@@ -516,6 +516,26 @@ Bo3 每两局之间，客户端进入换备牌阶段。**控制驱动模式下�
 
 `/prompt` 同时带：`sidePending`、`sideSummary`（一行摘要）、`sideChooseBy`（如 `"act_id kind=side_ok id=0"`）、`sideError`。
 
+**`/actions` 在 `sidePending` 时的返回（`side_ok` label 三态 + `changed` 字段）**：
+
+```json
+{"seq":12,"curMsg":0,"awaiting":true,"sidePending":true,
+ "actions":[{"id":0,"kind":"side_ok",
+             "label":"side deck changed (40/15/15); continue",
+             "changed":true,
+             "counts":{"main":40,"extra":15,"side":15},
+             "sideError":null}]}
+```
+
+| 字段 | 含义 |
+|---|---|
+| `label` | **三态文本**：① `keep side deck (no changes) and continue`（没换过）② `side deck changed (m/e/s); continue`（换过）③ `counts mismatch: fix ... before continue`（张数与 `pre` 不一致，不能 done） |
+| `changed` | **本次换备是否真的换过牌**（`side_swap` 成功过 → `true`）。**`counts` 相等 ≠ 没换牌**（换出 A 换入 B 时张数不变，只有 `changed` 能区分）——判断"我的换牌生效没有"用 `changed`，不要看 `counts` 是否等于 `pre` |
+| `counts` | 当前 `{main,extra,side}` 张数 |
+| `sideError` | `"counts must match"` 等校验错误；有值时**先修正张数再 `side_ok`** |
+
+> 旧版（≤ `2026-11-27 15:03:45`）`label` 是写死的 `"keep side deck (no changes) and continue"`（task-35/36 遗留字面量），即使已经换过牌也不变 → 与同 JSON 的 `counts` 矛盾，LLM 会误以为没生效而**重复换牌**（把 40/15/15 换重）。看到 `no changes` 但 `changed:true` = 旧版 label bug，升级即可；用 `changed` 判断。
+
 **`POST /side_swap?code=<卡号>&from=side|main|extra&to=main|extra|side&n=1`**
 移动 N 张同卡号：
 - 成功：`{"ok":true,"queued":true,"main":<m>,"extra":<e>,"side":<s>}`（**预测值**；可再读 `/state.side.counts` 确认）

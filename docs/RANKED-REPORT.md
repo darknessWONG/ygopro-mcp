@@ -404,3 +404,16 @@
   4. **回归**：`/ui` 默认 normal、act/act_id 正常、`retry=0`、无 eof。
 - **MC 排位复验待用户确认**：LAN 已 PASS；MC 环境（无 TYPE_CHANGE）由用户侧复验 `lastChainEvent` 文本 + `SEAT resolved seat=` 行。
 - **文档**：`MCP-INTERFACE.md` §4.0 补 `mySeat` 来源/`SEAT resolved` 日志；`PLAYBOOK-FULL.md` §4.1/连锁字段补"敌我按 `mySeat` 判定"。
+
+---
+
+## 21. 2026-11-27 `side_ok` label 写死 + `changed` 字段
+
+- **现象**：`/actions` 在换备阶段只有一条 `side_ok`，`label` 永远写死 `"keep side deck (no changes) and continue"`（task-35/36 遗留字面量），**即使已经 `/side_swap` 换过牌也不变**——与同一 JSON 的 `counts` 矛盾；LLM 因此以为换牌没生效而**重复换牌**（把 40/15/15 换重）。
+- **根因**：label 是写死的字符串常量，没有跟随 `side_move` 的状态；且"没换牌"无法用 `counts` 判断（换出 A 换入 B 张数不变）。
+- **修复（poc 出 build 中，指纹待定）**：
+  - `label` 改**三态**：`keep side deck (no changes) and continue`（没换过）/ `side deck changed (m/e/s); continue`（换过）/ `counts mismatch: fix ... before continue`（张数与 `pre` 不一致，不能 done）；
+  - `/actions` 的 `side_ok` JSON 新增 **`changed`** 字段（`side_swap` 成功过 → `true`），并带 `counts`、`sideError`；
+  - **`counts` 相等不代表没换牌，用 `changed` 判断**；`sideError:"counts must match"` 时先修正张数再 `side_ok`。
+- **文档**：`MCP-INTERFACE.md` §5.5 加 `sidePending` 时 `/actions` 返回示例 + label 三态/`changed` 语义 + 旧版 bug 说明；`PLAYBOOK-FULL.md` §3.9 加换备纪律（先看 `changed`/`counts`；`no changes` 但 `changed:true` = 旧版 → 升级；别重复 `side_move`）。
+- **验证**：待 bot-scout（PASS 后本节补证据）。

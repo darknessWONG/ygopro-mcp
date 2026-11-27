@@ -375,6 +375,12 @@ control_act({ seq: <当前 seq>, hex: "000201" })
 
 **关键**：**只有双方都 `side_ok`，服务器才会发下一局 `DUEL_START`**。一端确认后另一端没动，你会一直停在 `waiting`。
 
+**换备纪律（`side_ok` label / `changed`）**：
+- 换备前先看 `/actions` 里 `side_ok` 的 **`changed`** 和 **`counts`**：`changed:true` = 本次真的换过牌；**`counts` 相等 ≠ 没换牌**（换出 A 换入 B 张数不变）。
+- `label` 三态：`keep side deck (no changes) and continue`（没换过）/ `side deck changed (m/e/s); continue`（换过）/ `counts mismatch: fix ... before continue`（张数不对，先修）。
+- **若看到 `no changes` 但 `changed:true`**：旧版 label 写死 bug（≤ `2026-11-27 15:03:45`，task-35/36 遗留）→ 升级即可；**用 `changed` 判断，不要据此重复换牌**。
+- **重复 `control_side_move` 会把 40/15/15 换重**（比如把已换出的牌再换一次），一旦 `changed`/`counts` 显示已生效就停手；`sideError:"counts must match"` 时先按 `counts/limits` 修回再 `side_ok`。
+
 **LAN 特例**：`YGO_SIDE_AUTO=1` 可让客户端自动确认（测试用）。
 
 ### 3.10 下一局（Game2/3）
