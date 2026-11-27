@@ -21,6 +21,7 @@ description: 用 MCP 控制层真实操作 YGOPro 客户端打牌（MC 线上排
 7. **整场胜负只信 `control_match`**，不要用 `winPlayer` 推。
 8. **EOF guard（10:25:14 版起）**：prompt 空等 ~90s 会被 MC 排位按 AFK `eof` 踢；`YGO_PROMPT_AUTO_DEFAULT_MS`（默认 60000，0=关）45s 打 `PROMPT idle warning`、60s 自动发保守默认（`PROMPT auto-default ... (idle guard, LLM silent)`）。**超 60s 没答会被 guard 顶掉（保守动作），但别依赖它——正常要快**；`/prompt.awaitingSinceMs` 可看等待时长。
 9. **座位坐标（11-26 10:26:12 版起）**：`ctrl`/`isMine` 全部是**服务端座位坐标**，恒有 **`isMine == (ctrl == mySeat)`**——判敌我只用 `isMine` 或 `ctrl==mySeat`，**不要用 `ctrl` 猜**。`hand[0]` 是**本地手牌**（本地视角）、`myPlayer` 恒 0 只是索引视角（`hand[1]`=对手）。`places[]` 的 `ctrl` 是服务端座位、`ctrlRaw` 是本地原值，响应仍用 `bit`。旧版（≤11-23 14:53:57）在 **guest（mySeat=1）** 时会把双方阵营整体写反（自己的卡标「对手」、`isMine:false`），升级即可。
+10. **时点四态（11-27 11:04:58 版起）**：`chainMode` = **`0 all`（显示时点）/ `1 avail`（可用时点）/ `2 ignore`（忽略时点）/ `3 normal`（全不按，进对局默认）**；`YGO_CHAIN_MODE` 默认 `normal`，`/ui?chain=` 支持 4 值，real 字段（`chainMode`/三布尔）**≤1s 刷新**。`normal` 的 auto-decline 门和 `avail` 不同：normal 在 `count==0 || specount==0` 就放弃 → **只在 spec/select-trigger 窗口询问**；avail 仅 `count==0`；ignore 无条件；all 永不。读当前值用 `control_state().ui.chainMode`（与 `/state.chainMode` 一致）。
 
 ## 1. 先确认可用（30 秒）
 
@@ -97,11 +98,9 @@ while not state.match.over:
    推荐节奏：**开局 `avail` → 对方回合 `timeLeft` 掉得快（<150）或 prompt 刷屏 → `ignore` 止损 → ① 轮到自己第一件事就是切回 `avail`。**
    **🔴 最容易犯的错：切了 `ignore` 忘记切回 `avail`** —— 之后你**自己**的「抽到时→特召」等可选诱发会被客户端自动放弃，白丢展开（2026-11-25 实测吃亏）。
    **把「己方回合开始 → 切 avail」当成一条固定动作**，跟自己回合第一件事绑定。
-   **注意**：`/ui?chain=` **有延迟，而且有生效条件**（2026-11-26 实测确认）：
-   - 返回里 `desired:"ignore"` 但 `chainModeName` 仍是 `avail` + `applyPending:true`
-   - **必须先把「当前 pending 的那个 prompt 答掉」，`ignore` 才真正落地**（连发 4 次也不会提前生效）
-   → 所以**别以为"切了没反应"是失败**；切完先把手上的 prompt 答一次，再看 `chainModeName`。
-   （MCP 没有对应工具，只能走 HTTP `/ui?chain=`；可用 `control_state().ui.chainMode` 读当前值。）
+   **注意（11-27 11:04:58 版起）**：`/ui?chain=` 支持 **4 态**：`all(0=显示) / avail(1=可用) / ignore(2=忽略) / normal(3=全不按)`，**进对局默认 `normal`**（客户端冷启动也是它）。切换后 `desiredChainMode` 立即变，`chainMode/三布尔`（real）**≤1s 刷新**（旧版空闲 guest 不刷新、需等入站包；已修）。
+   - `normal` 的 auto-decline 门和 `avail` **不同**：normal 在 `count==0 || specount==0` 时放弃 → **只在 spec/select-trigger 窗口**才询问；`avail` 仅 `count==0` 放弃；`ignore` 无条件；`all` 永不。
+   - 读当前值用 `control_state().ui.chainMode` / `/ui`（`/state.chainMode` 与之一致）。
    **🔴 `ignore` 的两个致命副作用（2026-11-26 实测，有客户端日志）**：
    - **① 它不抑制 `curMsg 16 (SELECT_CHAIN)`** —— 即使 `chainModeName=ignore`，自由时点效果（如本家的 `斯奎兹`/`落胤与圣女`/`辉煌`）的窗口**仍反复弹给 LLM**（同一窗口弹过 6+ 次）。所以 `ignore` **不能**解决"窗口反复"的调用量问题。
    - **② 它会连"我方自己的可选诱发"一起自动放弃** —— 日志里是 `CHAIN client auto-decline` + `PROMPT skip auto-handled`，**本家的「抽到时→特召」「西艾萝抽卡」会被直接跳过，等于白丢一整个回合**。

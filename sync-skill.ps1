@@ -105,7 +105,18 @@ if ($Direction -eq 'live') {
 foreach ($n in $names) {
     $s = Join-Path $src $n
     if (-not (Test-Path $s)) { continue }
-    Copy-Item $s (Join-Path $dst $n) -Force
+    $d = Join-Path $dst $n
+    # per-file guard: never overwrite a NEWER destination unless -Force (a blanket
+    # direction can otherwise clobber the only up-to-date copy of one file)
+    if ((Test-Path $d) -and (-not $Force)) {
+        $si = Get-Item $s
+        $di = Get-Item $d
+        if ($si.LastWriteTime -lt $di.LastWriteTime) {
+            Write-Host "SKIP $n (source older than destination; use -Force to override)"
+            continue
+        }
+    }
+    Copy-Item $s $d -Force
     Write-Host "copied $n  ($label)"
 }
 Write-Host ''
