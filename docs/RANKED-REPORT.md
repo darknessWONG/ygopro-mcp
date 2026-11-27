@@ -389,3 +389,18 @@
   2. **四态切换（guest 空闲侧重点 + host 对照）**：`all→0/alwaysChain=true`、`avail→1/chainWhenAvail=true`、`ignore→2/ignoreChain=true`、`normal→3/三 bool 全 false`；`desired/applied` 全程跟随、`applyPending=false`；guest 切换后 **150ms 首采样即正确（<1s）**；`/state.chainMode` 与 `/ui.chainMode` **28 采样 0 mismatch**；host 四态同样 PASS。
   3. **normal 下链功能正常**：guest 收到 `MSG_SELECT_CHAIN`（`chainCandidates=[{code:27243130,name:"禁忌的圣枪",ctrl:1,isMine:true}]`）→ `activate` ok、`advanced:true`；全程 `retry=0`、无 RETRY/eof。
   4. **中间 build `C9120889` 的 guest `/ui` real 不刷新已修**（对照 `chain-mode-20261127-110232/`）：root cause 是 `/ui?chain=` 未置 `g_snapshotWanted`、空闲 guest 无 STOC 触发 snapshot 重建；`C1FBADF9` 在 `ApplyChainMode` 末尾立即刷新 `g_shared` real 字段并置 `g_snapshotWanted`，guest 150ms 内生效。
+
+---
+
+## 20. 2026-11-27 SelfSeat 根因修复（`lastChainEvent` 阵营反）
+
+- **现象**：guest 侧（`mySeat` 应为 1）看到 `lastChainEvent` 阵营文本反向（自己发动的卡显示「对手发动」）、`ctrl` 输出 0、`isMine` 全错；host（seat 0）恰好正常。
+- **根因**：`SelfSeat()` 的旧逻辑依赖 `STOC_TYPE_CHANGE`/launcher `-c/-j` 推断；**MC 排位不保证发 `STOC_TYPE_CHANGE`**，且 launcher 用 `-d/-k` 会让 `-c/-j` fallback 失效 → guest 的 `mySeat` 被错判成 **0**。`lastChainEvent` 的阵营判断（服务端 `cc` 与 `mySeat` 比较）和全路径 `ToServerSeat` 都跟着错。
+- **修复（`2026-11-27 15:03:45 / 6,335,488 / 33CF5166…`）**：`SelfSeat()` 在对局/换备期间（`isInDuel || isStarted`）**以 `dInfo.isFirst` 为准**——`isFirst==true ⟺ 服务端座位 0`（`mySeat = isFirst ? 0 : 1`）；`MSG_START` 后打日志 `SEAT resolved seat=%d isFirst=%d selftype=%d launch=%d` 供核对（guest 应 `seat=1 isFirst=0`；`selftype` 依赖服务器是否发 TYPE_CHANGE、`launch` 是 `-c/-j` 推断值，两者都不是 seat 依据）。
+- **验证（bot-scout `ranked/logs/lastchain-side-validation.md`，`lastchain-20261127-150441/`）PASS**：
+  1. **文本**：guest 发动黑洞 → guest `lastChainEvent = 我方发动 [黑洞]（黑洞 的效果）→ 连锁`；host 同时 = `对手发动 [黑洞]…`（25ms 高频采样抓到瞬时文本）；
+  2. **字段**：host seat=0 / guest seat=1；guest `summonableCards ctrl=1 isMine=true`；guest `/lobby.isHost=false`；
+  3. **日志**：guest `SEAT resolved seat=1 isFirst=0 selftype=1 launch=-1`；host `seat=0 isFirst=1 selftype=0`；
+  4. **回归**：`/ui` 默认 normal、act/act_id 正常、`retry=0`、无 eof。
+- **MC 排位复验待用户确认**：LAN 已 PASS；MC 环境（无 TYPE_CHANGE）由用户侧复验 `lastChainEvent` 文本 + `SEAT resolved seat=` 行。
+- **文档**：`MCP-INTERFACE.md` §4.0 补 `mySeat` 来源/`SEAT resolved` 日志；`PLAYBOOK-FULL.md` §4.1/连锁字段补"敌我按 `mySeat` 判定"。

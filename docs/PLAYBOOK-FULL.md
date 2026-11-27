@@ -2,7 +2,7 @@
 
 > **读者**：要真正操作这套桥接去排位/局域网打牌的 LLM agent（以及维护它的工程师）。
 > **目标**：零歧义——每一步"做什么、调什么、返回什么、怎么判定成功/失败、失败怎么修"。
-> **当前客户端构建**：`2026-11-27 11:04:58 / 6,334,976 B`，SHA256 `C1FBADF954046FF827182AFB523A5473AAED624FB8EB0CEE744B794F80929991`（`node doctor.mjs --client <exe> --strict-build` 可校验）。
+> **当前客户端构建**：`2026-11-27 15:03:45 / 6,335,488 B`，SHA256 `33CF5166CD9A9E7380B03158AE684DB719F4553C2776FAFC897D526AD4A893AB`（`node doctor.mjs --client <exe> --strict-build` 可校验）。
 > **权威性**：本文是操作流程的权威；字段级契约见 [`MCP-INTERFACE.md`](MCP-INTERFACE.md)，排位实战记录见 [`RANKED-REPORT.md`](RANKED-REPORT.md)，精简单页见 [`MATCH-PLAYBOOK.md`](MATCH-PLAYBOOK.md)。
 > **本文所有示例字段名都按当前客户端真实输出**（可对照 `ranked/logs/playbook-samples/` 下的真实采样）。
 
@@ -443,7 +443,7 @@ control_act({ seq: <当前 seq>, hex: "000201" })
 
 ### 4.1 `GET /state`（顶层）
 
-> **座位坐标（`10:26:12` 起统一）**：`ctrl` 一律**服务端座位**、**`isMine == (ctrl == mySeat)`**；`hand[0]`/`monsters[0]` 是**本地索引顺序**，`myPlayer` 恒 0 只是索引视角；guest（`mySeat=1`）时自己的卡 `ctrl=1/isMine=true`、对手 `ctrl=0/isMine=false`；`places[]` 的 `ctrl` 服务端、`ctrlRaw` 本地（响应用 `bit`）。**旧版 guest 阵营反向（≤11-23 14:53:57 已修）**，判断敌我优先用 `isMine`，别再靠卡名反查。
+> **座位坐标（`10:26:12` 起统一；`15:03:45` 修 `mySeat` 来源）**：`ctrl` 一律**服务端座位**、**`isMine == (ctrl == mySeat)`**；`hand[0]`/`monsters[0]` 是**本地索引顺序**，`myPlayer` 恒 0 只是索引视角；guest（`mySeat=1`）时自己的卡 `ctrl=1/isMine=true`、对手 `ctrl=0/isMine=false`；`places[]` 的 `ctrl` 服务端、`ctrlRaw` 本地（响应用 `bit`）。**`mySeat` 对局/换备期间来自 `dInfo.isFirst`**（`isFirst==true ⟺ 服务端座位 0`）——MC 不发 `STOC_TYPE_CHANGE`、launcher `-d/-k` 让 `-c/-j` fallback 失效时，旧版 guest 会错判成 0（`lastChainEvent` 阵营反/`ctrl` 输出 0）；日志 `SEAT resolved seat=.. isFirst=.. selftype=.. launch=..` 可核对（guest 应 `seat=1 isFirst=0`）。判断敌我优先用 `isMine`，别再靠卡名反查。
 
 | 字段 | 含义 | 典型值（未进房 → 对局中） |
 |---|---|---|
@@ -520,7 +520,7 @@ control_act({ seq: <当前 seq>, hex: "000201" })
 | 宣言 | `announceNumberValues`（仅 `MSG_ANNOUNCE_NUMBER(143)`：可用数值列表，`announce_number` 的候选；响应=数值本身） |
 | 阶段 | `canBp` `canEp` |
 | 候选卡 | `summonableCards` `spsummonableCards` `msetableCards` `ssetableCards` `activatableCards` `attackableCards` |
-| 连锁 | `chainDepth` `chainStack` `chainingTo` `chainCandidates` `canDecline` `hint` `lastChainEvent` |
+| 连锁 | `chainDepth` `chainStack` `chainingTo` `chainCandidates` `canDecline` `hint` `lastChainEvent`（阵营文本如 `我方发动 [黑洞]…`/`对手发动 […]`；**敌我按 `mySeat` 判定**——服务端 `cc` 与 `mySeat` 比较；`mySeat` 来自 `dInfo.isFirst`，`SEAT resolved seat=.. isFirst=..` 日志可核对） |
 | 放置 | `places` `placesMask` `placeCoords`（`"server"`）；`places[].ctrl`=服务端座位、`ctrlRaw`=本地视角（调试），**响应用 `bit`** |
 | 先/后攻/换备 | `tpPending` `tpOptions`（`[1,2]`）/ `sidePending` `sideSummary` `sideChooseBy` `sideError` |
 

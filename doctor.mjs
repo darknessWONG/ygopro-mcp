@@ -38,9 +38,9 @@ const TIMEOUT = Math.max(200, Number(opt('timeout', 1500)) || 1500);
 
 // Fingerprint of the client build this bridge is developed/tested against (see README).
 const EXPECTED = {
-  size: 6334976,
-  mtime: '2026-11-27 11:04:58',
-  sha256: 'C1FBADF954046FF827182AFB523A5473AAED624FB8EB0CEE744B794F80929991',
+  size: 6335488,
+  mtime: '2026-11-27 15:03:45',
+  sha256: '33CF5166CD9A9E7380B03158AE684DB719F4553C2776FAFC897D526AD4A893AB',
 };
 
 const C = { green: (s) => `[GREEN]  ${s}`, yellow: (s) => `[YELLOW] ${s}`, red: (s) => `[RED]    ${s}`, info: (s) => `[INFO]   ${s}` };

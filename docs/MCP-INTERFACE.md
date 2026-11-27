@@ -4,8 +4,8 @@
 > **先读（操作流程）**：[`PLAYBOOK-FULL.md`](PLAYBOOK-FULL.md) —— 全流程权威操作手册（每步判定/工具速查/状态字典/排错）；本文档是字段与接口契约。
 >
 > **适用版本（当前正式版 exe）**：`mycard-client/bin/release/x64/YGOPro.exe`
-> = **2026-11-27 11:04:58 / 6,334,976 B**，SHA256 `C1FBADF954046FF827182AFB523A5473AAED624FB8EB0CEE744B794F80929991`
-> （2026-11-27 **时点四态 `normal` 定稿版**：`0=all / 1=avail / 2=ignore / 3=normal(三按钮全不按)`，**进对局默认 `normal`**；`ChainModeName(3)="normal"`、`YGO_CHAIN_MODE` 4 值默认 normal；`ApplyChainMode` m==3 清三 bool、self-heal 4 态比较；`/ui?chain=normal` setter + 应用后立即刷新 real 字段/`g_snapshotWanted`（guest 空闲 readback <1s 生效）。另含前版座位坐标/wait_prompt/stall/看门狗；验收/历史见文末记录）
+> = **2026-11-27 15:03:45 / 6,335,488 B**，SHA256 `33CF5166CD9A9E7380B03158AE684DB719F4553C2776FAFC897D526AD4A893AB`
+> （2026-11-27 **SelfSeat 修复版**：`SelfSeat()` 在对局/换备期间以 `dInfo.isFirst` 为准（`isFirst==true ⟺ 服务端座位 0`），修 MC 不发 `STOC_TYPE_CHANGE`、launcher `-d/-k` 使 `-c/-j` fallback 失效时 guest 被错判成 seat 0（`lastChainEvent` 阵营反、`ctrl` 输出 0）；`SEAT resolved seat=.. isFirst=.. selftype=.. launch=..` 可核对。另含前版时点四态 normal（默认）/座位坐标/wait_prompt/stall/看门狗；验收/历史见文末记录）
 > `/state.resume.reason` 在加载成功时返回 `"loaded"`，行为不变；22:23:28 已做过冒烟）。
 > 该版含重连基础能力：`GET /net`、自动 `/tip` 探活、`YGO_SUPPRESS_MODALS` 模态框抑制、
 > `resume-context-<port>.json` journal、`POST /leave`（详见 [RECONNECT-DESIGN.md](RECONNECT-DESIGN.md)、[reconnect-lab.md](reconnect-lab.md)）。
@@ -260,6 +260,12 @@ body = PromptJson(g_shared);
 **旧版（≤ `2026-11-23 14:53:57`）问题**：guest 侧 `controler` 是本地视角，直接和 `mySeat`（服务端座位）比较 → 阵营反了（自己卡 `isMine:false`、label「对手」；对手卡 `isMine:true`）；host（`mySeat=0`）恰好掩盖。`10:26:12` 起 `ToServerSeat(localCtrl,mySeat)`（0→mySeat、1→1−mySeat、≥2 原样）在所有路径统一转换。
 
 **适用字段**：`hand`/`monsters`/`spells`/`grave`/`banished`、`selectableCards[]`、`chainList`/`chainStackSnap`/`chainStackFull`/`chainCandidates`、`places[]`（`ctrl` 服务端 + `ctrlRaw` 本地）、`CaptureChainAnalyze` fallback、chain 路径 label「我方/对手」。`lastChainEvent` 不变（本来就是服务端座位）。
+
+**`mySeat` 从哪来（`15:03:45` 版修复）**：对局/换备期间（`isInDuel || isStarted`）**以 `dInfo.isFirst` 为准**：`isFirst==true ⟺ 服务端座位 0`（`mySeat = isFirst ? 0 : 1`）。**MC 排位不保证发 `STOC_TYPE_CHANGE`**，且 launcher 用 `-d/-k` 会让 `-c/-j` 推断 fallback 失效——旧版在这种情况下 guest 会被错判成 seat 0（表现为 `lastChainEvent` 阵营反、`ctrl` 输出 0、`isMine` 全错）。核对方式：`MSG_START` 后看日志
+```
+SEAT resolved seat=%d isFirst=%d selftype=%d launch=%d
+```
+guest 应为 `seat=1 isFirst=0`、host `seat=0 isFirst=1`（`selftype` 依赖服务器是否发 TYPE_CHANGE，`launch` 是 `-c/-j` 推断值；两者都不是判定 seat 的依据）。
 
 > 卡牌数组本身仍是 `[我方, 对手]` 的**本地索引顺序**；元素内部的 `ctrl/isMine` 才是服务端座位语义。判断敌我优先用 `isMine`（`ctrl==mySeat`），不要再靠卡名反查。
 
@@ -999,7 +1005,7 @@ $env:YGO_UI_ACTIONS='0'; powershell ... bridge\lan-run.ps1 -Games 1
 5. **链字段有 1 帧延迟**：`/state` 与 `/prompt` 的链字段来自 UI 线程快照；`chainStack[].forced` 恒 false、`type` 固定 `effect`。
 6. **UI 模式个别动作有 600ms 校验延迟**（点不中时才会走满）。
 7. **多效果卡默认点第 0 个 option**（可能不是最优效果）；`announce/counter/sort/sum` 是"安全默认"而非最优。
-8. **线上排位：能完整打完，但胜率依赖策略**：客户端/管线侧已实测可拿房→进房→选卡组→准备→完整对局→自然结算（LP_ZERO 等），并支持受控掉线后约 13s 重连回同房继续打；输局主要是 policy 保守（大量 `decline`/`to_bp`/`end`），不是管线卡死。**排位相关新字段（`/state.deckError`、`/state.isWin/isLoss/isDraw`、`/state.lpOrder`、`/state.pipeline.recentMsgs`、`/state.tpPending`+`/state.tpOptions`、`/actions` 的先/后攻动作 `kind:"tp"`+`index:1|2`、`/state.sidePending`、`/actions` 的换备牌动作 `kind:"side_ok"`（Bo3 每局之间，`id=0` → `btnSideOK`/`SendUpdateDeck`）、**`/state.side`（`available/pending/waiting/elapsedMs/waitingSeen/lastWaitMs/main/extra/side/counts/pre/limits/error`）+ `POST /side_swap`（真正换牌）+ `side_ok` 竞态修复**、**`/state.match`（`game`/`over`/`games[]`（含 `win`/`winnerSeat`/`reasonName`）/`gamesWonLocal`/`gamesWonOpp`/`lastWinnerLocal`/`lastReasonName`，配合 `control_match` 一句话报结果）**、`CHAIN raw` 等；Bo3 Game2/3 开局客户端会 `DUEL_START reset result state` 重置 `winPlayer/winReason`）只在客户端 `2026-11-27 11:04:58 / 6,334,976 B`（sha256 `C1FBADF954046FF827182AFB523A5473AAED624FB8EB0CEE744B794F80929991`）及之后存在**；旧 exe 请先升级。详见 [`RANKED-REPORT.md`](RANKED-REPORT.md)。
+8. **线上排位：能完整打完，但胜率依赖策略**：客户端/管线侧已实测可拿房→进房→选卡组→准备→完整对局→自然结算（LP_ZERO 等），并支持受控掉线后约 13s 重连回同房继续打；输局主要是 policy 保守（大量 `decline`/`to_bp`/`end`），不是管线卡死。**排位相关新字段（`/state.deckError`、`/state.isWin/isLoss/isDraw`、`/state.lpOrder`、`/state.pipeline.recentMsgs`、`/state.tpPending`+`/state.tpOptions`、`/actions` 的先/后攻动作 `kind:"tp"`+`index:1|2`、`/state.sidePending`、`/actions` 的换备牌动作 `kind:"side_ok"`（Bo3 每局之间，`id=0` → `btnSideOK`/`SendUpdateDeck`）、**`/state.side`（`available/pending/waiting/elapsedMs/waitingSeen/lastWaitMs/main/extra/side/counts/pre/limits/error`）+ `POST /side_swap`（真正换牌）+ `side_ok` 竞态修复**、**`/state.match`（`game`/`over`/`games[]`（含 `win`/`winnerSeat`/`reasonName`）/`gamesWonLocal`/`gamesWonOpp`/`lastWinnerLocal`/`lastReasonName`，配合 `control_match` 一句话报结果）**、`CHAIN raw` 等；Bo3 Game2/3 开局客户端会 `DUEL_START reset result state` 重置 `winPlayer/winReason`）只在客户端 `2026-11-27 15:03:45 / 6,335,488 B`（sha256 `33CF5166CD9A9E7380B03158AE684DB719F4553C2776FAFC897D526AD4A893AB`）及之后存在**；旧 exe 请先升级。详见 [`RANKED-REPORT.md`](RANKED-REPORT.md)。
 9. **被动判死（对手回合 60s eff + `NET silence diag`）**：对手长时间不出手时，客户端会按"对手回合 60s eff"推进判定，并在 `/net` 相关日志打 `NET silence diag`（链路静默诊断，不主动断线）；被动判死不是本仓库 policy 的行为，属客户端/服务端规则。`/net` 的 `alive`/`sinceLastStoc` 在静默期会持续增长——要区分"对手在思考（slow play）"和"对手掉线"，以 `NET silence diag` + `/net.probe` 的 `fails`/`rttMs` 判断；详见 `mycard-client/docs/CONTROL-API.md` 的 `/net` 一节。
 10. **控制驱动下 `STOC_REPLAY` 直接跳过（`replay: dialog skipped`）**：不会弹回放对话框、**不阻塞网络线程**（否则回放保存框会卡住后续 STOC）。**已 LAN 实测**（2026-11-13：双方各 2 次 `replay: dialog skipped (control-driven, no wait)`、`replay-save=0`、`stoc=23 stall=0`）；排位 LP_ZERO 结算场景同样走该路径（不再需要"未实测"假设）。若上线后出现结算后收不到后续包，先查这里。
 11. **prompt 空等 ~90s 会被服务端按 AFK `eof` 踢（MC 排位行为）；LAN srvpro 不踢 eof，而是 180s `TIMEOUT` 判负**（证据 `ranked/logs/eof-guard-validation.md`、`control-23776.log`）。`10:25:14` 版起默认 `YGO_PROMPT_AUTO_DEFAULT_MS=60000` 自动发保守默认动作兜底（45s 先打 `PROMPT idle warning`），可用 `/prompt.awaitingSinceMs` 看等待时长；`0`=关闭（不建议）。
