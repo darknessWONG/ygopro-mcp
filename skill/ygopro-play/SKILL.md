@@ -53,7 +53,13 @@ description: 用 MCP 控制层真实操作 YGOPro 客户端打牌（MC 线上排
 | 6 | 先/后攻 | `control_prompt().tpPending` / `control_actions` 的 `kind:"tp"` → `control_act_id` | 日志 `TP choice res=` / `TP auto-answered`；2s 内不答会自动选 | **超过 13s 服务端踢人** |
 | 7 | 对局决策 | `control_prompt`/`control_wait_prompt` → `control_actions` → `control_act_id(id, seq)` | `prompt.seq` 增长、`awaiting` 变化 | `awaiting=false` 不动；同 prompt 只回一次 |
 | 8 | 一局结束 | 等 `state.match.games` 多一条 | `control_match.match.games[].reasonName` | 立刻 `control_match` 报告 |
-| 9 | 换备（Bo3） | `state.side.pending` →（可选 `control_side_move`）→ `control_side_done()` | 日志 `SIDE ok clicked`；`state.match.game` 递增 | 两侧都要 side_ok；张数不守恒会被拒 |
+| 9 | 换备（Bo3） | `state.side.pending` →（可选 `control_side_move`）→ `control_side_done()` | `/actions` 的 `changed/counts/sideError`；日志 `SIDE ok clicked`；`state.match.game` 递增 | label 三态（见下）；**两侧都要 side_ok**；张数不守恒会被拒 |
+
+> **换备返回怎么读（11-27 17:09:18 版起）**：`/actions` 在 `sidePending` 时返回 `side_ok`，并在**顶格**带 `changed` / `counts{main,extra,side}` / `sideError`：
+> - `label` 三态：`keep side deck (no changes) and continue` / `confirm side deck (changed) and continue` / `counts mismatch: fix main/extra/side counts before confirming`；
+> - **`counts` 相等 ≠ 没换牌**（换出 A 换入 B 张数不变）——判断"换过没"用 **`changed`**；
+> - `changed:true` 就说明已经生效，**别再重复 `side_move`**（会把 40/15/15 换重）；`sideError:"counts must match"` 时先补回守恒再 `side_ok`；
+> - 旧版（≤15:03:45）label 写死 "no changes"（task-35/36 遗留），**看到 `no changes` 但 `changed:true` 就是旧版**，升级即可；新换备窗口 `changed` 会复位 false。
 | 10 | 下一局 | 等 `DUEL_START reset (match game N)` | `started` 重新 true、`match.game` 递增 | TP 再来（2s 自动） |
 | 11 | 整场结束 | 等 `state.match.over==true` | `control_match.summary` 给比分与原因 | 报用户，然后重排 |
 
