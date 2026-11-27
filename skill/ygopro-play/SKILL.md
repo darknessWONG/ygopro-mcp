@@ -132,11 +132,11 @@ while not state.match.over:
    ① 对方回合临时切 `ignore(2)`（实测省约 1/3 调用），**轮到自己立刻切回 `normal(3)`**；
    ② 同一窗口第 2 次重复就一次性 decline 到底，别反复犹豫；
    ③ 向桥接维护者提：**"同一 turn 内同一 code 只问一次"的记忆抑制**（若实现，调用数可直接砍约 60%）。
-   **🔴 `ignore` 的两个致命副作用（2026-11-26 实测，有客户端日志）**：
-   - **① 它不抑制 `curMsg 16 (SELECT_CHAIN)`** —— 即使 `chainModeName=ignore`，自由时点效果（如本家的 `斯奎兹`/`落胤与圣女`/`辉煌`）的窗口**仍反复弹给 LLM**（同一窗口弹过 6+ 次）。所以 `ignore` **不能**解决"窗口反复"的调用量问题。
-   - **② 它会连"我方自己的可选诱发"一起自动放弃** —— 日志里是 `CHAIN client auto-decline` + `PROMPT skip auto-handled`，**本家的「抽到时→特召」「西艾萝抽卡」会被直接跳过，等于白丢一整个回合**。
-   → **纪律：`ignore` 只能在你"确定这回合不需要任何自家诱发"时短暂使用**（例如对方回合收尾），**己方回合第一步必须切回 `avail` 并确认 `chainModeName=avail`**。
-   → **不要指望 `ignore` 把调用数压下来**；真正的减调用手段是「同一窗口第 2 次重复就一次性 decline 到下一事件」「必发效果直接按」「`to_bp` 失败重取一次」。
+   **🔴 `ignore` 的实际表现（2026-11-27 更新）**：
+   - **① 它不抑制 `curMsg 16 (SELECT_CHAIN)` 的自由时点重发** —— 即使 `chainModeName=ignore`，自由时点效果（如本家 `斯奎兹`/`落胤与圣女`/`辉煌`）的窗口仍会反复弹。所以 `ignore` **不能**解决"窗口反复"的调用量问题。
+   - **② 我方诱发不再被吞（11-27 17:22:16 起）**：auto-decline 会先看本窗口候选里有没有**我方**的卡（`controler==0`）；有就**不自动放弃**，prompt 正常弹出。日志 `CHAIN client auto-decline ... ownCand=1 ignoreDecline=0` 即表示保住了我方窗口；`YGO_CHAIN_IGNORE_KEEP_OWN=0` 可恢复旧行为（会吞）。
+   - 旧版（≤11-27 17:09:18）`ignore` 会连「抽到时→特召」「西艾萝抽卡」一起自动放弃（`CHAIN client auto-decline` + `PROMPT skip auto-handled`），白丢回合；升级即可。
+   → **纪律**：`ignore` 仍只作**对方回合的止损**，轮到自己第一件事切回 `normal`/`avail` 并确认 `chainModeName`；**不要指望它压调用数**，减调用靠「同窗口第 2 次重复就一次性 decline 到下一事件」「必发效果直接按」「`to_bp` 失败重取一次」。
 
 9. **🔴 自由时点的窗口会"重发"，能把预算打爆**（2026-11-25 实测：单回合 **44 次**调用，预算 12–14）
    典型：**速攻魔法**（如 `落胤与圣女`）在自由时点每给一次优先权就弹一次 → decline→再弹→再 decline，循环烧往返。
@@ -147,7 +147,8 @@ while not state.match.over:
    实测事故：按 `select_card #3`（对方的关键卡）提交，**结算却炸掉了自己场上的怪** —— 怀疑 prompt 与 actions 之间存在帧差，`selectableCards` 在两次调用间重排。
    **纪律**：① 拿到 `select_card` 列表后**立刻**提交，中间不插任何其它调用；② 若中间隔了别的调用（读局面/查日志），**必须重新 `control_actions` 再选**；③ 优先用 label 里带**卡名**的候选来核对，不要只凭 `code`/下标。
 
-选动作：`yesno` 按收益；`option` 按效果；`card/place` 用 prompt 里的 `selectableCards/placeOptions`；`chain` 有反制才链；`position` 按场面；`idlecmd` 展开/结束；`side_ok` 见第 2 节第 9 步；`tp` 必须快。
+**表示形式（`MSG_SELECT_POSITION`）**：`/prompt.selectablePositions`（+`selectablePositionsHex`）是**合法 POS 掩码**：`0x1` 表侧攻击 / `0x2` 里侧攻击(set) / `0x4` 表侧守备 / `0x8` 里侧守备(set)。`/actions` 只给掩码内项，**按 label 选**（`attack position (face-up ATK)` / `defense position (face-up DEF)` / `defense position (face-down DEF / set)` …），`act_id` 会自动发正确 POS 值。**单 bit 掩码客户端自动应答、不出窗口**。旧版（≤11-27 17:09:18）把 defense 写死成 `0x02`（=里侧攻击，非法）→ 服务器不推进、同一 prompt 连发；升级即可。
+
 
 **攻击目标（`/prompt.isAttackTarget==true`）必须用 `kind:"select_card"` 按 `atk/def` 选最优者**（`15:18:21` 起每个候选一条，label 带 `atk/def/loc/seq`）；**不要用 `select_auto` 或旧 `id=0`**——单目标时它们永远打第一只（旧版"有对象攻击不结算"的根因）。多选（`selectMin>1`）才用 `select_auto`。
 
