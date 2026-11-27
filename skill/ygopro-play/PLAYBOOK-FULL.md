@@ -461,7 +461,7 @@ control_act({ seq: <当前 seq>, hex: "000201" })
 | `isWin`/`isLoss`/`isDraw` | 本地视角胜负 | `false`/`false`/`false` → 一真 |
 | `winReason`/`winReasonName` | 原始原因/名字 | `-1/UNKNOWN` → `1/LP_ZERO` |
 | `match` | 整场 Bo3 结果（见 4.2） | 见下 |
-| `chainMode` | 连锁模式 | `1`（`avail`） |
+| `chainMode` | 连锁时点（4 态）：`0=all`（显示时点）/`1=avail`（可用时点）/`2=ignore`（忽略）/`3=normal`（三按钮全不按，**对局默认**） | `3`（`normal`）→ `1`（`avail`，被策略改过） |
 | `seq`/`awaiting` | prompt 序号/是否等你响应 | `0/false` → `5/true` |
 | `sidePending`/`tpPending` | 换备/先后攻挂起 | `false`/`false` |
 | `deckMain`/`deckExtra` | 卡组张数 | `0` → `40/15` |
@@ -548,7 +548,7 @@ control_act({ seq: <当前 seq>, hex: "000201" })
 
 ### 4.7 `/ui`
 
-`chainMode`/`chainModeName`、`alwaysChain`/`chainWhenAvail`/`ignoreChain`/`desiredChainMode`/`appliedChainMode`/`applyPending`、`uiCleanupCount`、`popupMask`、`popups:{posSelect,options,cardSelect,cmdMenu,message}`、`windows`/`windowsVisible`（可见窗口名）。
+`chainMode`/`chainModeName`（**4 态**：0=all / 1=avail / 2=ignore / **3=normal（三按钮全不按，默认）**；`normal` 的 auto-decline 门是 `count==0 || specount==0`，`duelclient.cpp:1886`）、`alwaysChain`/`chainWhenAvail`/`ignoreChain`（原始 bool；normal=全 false）、`desiredChainMode`/`appliedChainMode`/`applyPending`（desired 支持 3）、`uiCleanupCount`、`popupMask`、`popups:{posSelect,options,cardSelect,cmdMenu,message}`、`windows`/`windowsVisible`（可见窗口名）。
 
 ### 4.8 `/lobby`、`/chat`、`/msg`、`/actions`
 
@@ -602,6 +602,7 @@ control_act({ seq: <当前 seq>, hex: "000201" })
 ### 6.1 动作节奏表
 
 > **启动客户端前的硬性配置**：`YGO_NET_DEAD_SILENCE_MS` 用**默认 60000** 即可（最多 120000）；**不要再长期设 600000**（真掉线 10 分钟才发现；probe 误判已修、看门狗 `clockFresh` 已修）。`17:33:31` 版起 `/net` 有 `ourTurn/oppTurn/timeLeft/clockFresh`，客户端 `net.heartbeat` 每 15s 打一条。旧 exe（默认 10s）才需要 600000。`10:25:14` 版另有 EOF guard：`YGO_PROMPT_AUTO_DEFAULT_MS=60000` / `YGO_PROMPT_IDLE_WARN_MS=45000`（默认即推荐值）。
+> **时点模式**：`YGO_CHAIN_MODE` 默认 **`normal`**（三按钮全不按；旧版默认 `avail`）。4 态：`all`/`avail`/`ignore`/`normal`；进对局自动应用、之后自愈重设（4 态比较）。`normal` 的 auto-decline 门是 `count==0 || specount==0`（`duelclient.cpp:1886`）——只在 spec/select-trigger 窗口问你，普通诱导窗口不打扰；想"每个窗口都问"设 `all`，想"完全不问"设 `ignore`。
 
 | 动作 | 建议间隔/超时 | 说明 |
 |---|---|---|
@@ -624,6 +625,7 @@ control_act({ seq: <当前 seq>, hex: "000201" })
 | 单步决策上限 | **<60s（目标 <30s）** | 服务端 AFK ~90s 踢人；踢前有红字警告 |
 | 单场预算 | 18 分钟（`-MaxMinutesPerMatch`） | 从 `duel started` 起算（不是排队） |
 | 总预算 | 90 分钟（`-MaxTotalMinutes`） | 包含排队时间 |
+| **时点（`chainMode`）** | 4 态：`0=all / 1=avail / 2=ignore / 3=normal` | **进对局默认 `normal`**（三按钮全不按，`count==0\|\|specount==0` 自动放弃、只在 spec/select-trigger 窗口问）；`avail` 是旧默认（仅 `count==0` 放弃）；`/ui.chainMode` 可读，`desiredChainMode` 可设 3 |
 
 **`confirmed_dead` 判死阈值**：`/net.state` 变成 `confirmed_dead` 的触发来自 `YGO_NET_DEAD_SILENCE_MS`。**旧 exe 默认 10000ms**：自己回合思考 >10s 会被误判 → 提示管线冻结 → 被踢；**旧 exe 必须设 600000**。**当前版默认 60s，并且我方回合、且 `timeLeft` 在走时不会判死**（日志 `NET ALIVE reason=our-turn-idle`）。**`11:31:00` 版起 `/tip` probe 失败不再单独判死**（旧版 `NET DEAD reason=probe-fails` 是 bug）：失败只 `probe_failed`，日志 `NET probe failed fails=.. (defer to passive silence guard)`，`YGO_NET_PROBE_FAIL_MAX`（默认 5）仅降级/日志；**对手长展开 7–8s 静默不应判死**。
 
@@ -735,6 +737,7 @@ YGO_CONTROL_PORT=7789 YGO_TP=2 YGO_SIDE_AUTO=1 .\YGOPro.exe -h 127.0.0.1 -p 7911
 ```
 
 > 排位脚本（`ranked-loop.ps1`）启动客户端前也必须设 `YGO_NET_DEAD_SILENCE_MS=600000`（旧 exe 默认 10s 会误判 `confirmed_dead`）。
+> 时点：`YGO_CHAIN_MODE` **默认 `normal`**（三按钮全不按）；想要"每窗口都问/完全不问"分别设 `all`/`ignore`，`avail` 是旧默认（仅 `count==0` 放弃）。
 
 ### 7.4 验证/复现工具清单（`bridge/` 下，2026-11-16 新增）
 

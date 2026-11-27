@@ -363,3 +363,19 @@
   - chain 回归：`我方[黑洞]/对手[旋风]` label 正确；
   - `resp`→hex 回归正常（`hex="01"+resp`）、`retry=0`、无 RETRY/eof。
 - **文档**：`MCP-INTERFACE.md` §4.0 新增「座位坐标约定」；`PLAYBOOK-FULL.md` §4.1/字段字典补 `ctrl/isMine/ctrlRaw/mySeat/myPlayer`。**判断敌我用 `isMine`（`ctrl==mySeat`），不要再靠卡名反查。**
+
+---
+
+## 19. 2026-11-27 时点四态 `normal` + 默认 `normal`
+
+- **背景（人工观察）**：`/ui` 的三按钮状态实际存在**第 4 态：三按钮全不按**（客户端冷启动默认），但旧版 `/ui` 把它**误报为 `avail`**（`chainMode:1`）；旧文档只记录 `0/1/2` 三态、`YGO_CHAIN_MODE` 默认 `avail`。
+- **修复（客户端改动中，poc 出 exe 后统一切指纹）**：
+  - `chainMode` 正式扩为 **4 态**：`0=all(显示时点) / 1=avail(可用时点) / 2=ignore(忽略时点) / 3=normal(三按钮全不按)`；`chainModeName` 对应；
+  - **进入对局默认 `normal`**（不再默认 `avail`）；`desiredChainMode` 也支持 `3`；apply/self-heal 按 **4 态**比较（旧版 3 态比较会把 normal 误判成 avail 而"纠正"回去）；
+  - `YGO_CHAIN_MODE=all|avail|ignore|normal`（默认 `normal`）；保留 `alwaysChain/chainWhenAvail/ignoreChain` 原始布尔（normal = 三个全 false）。
+- **`normal` 与 `avail` 的功能差异**（auto-decline 门，`duelclient.cpp:1886`）：
+  - `normal`：`count==0 || specount==0` 时自动放弃 → **只在 spec/select-trigger 窗口询问**；
+  - `avail`：仅 `count==0` 时放弃；
+  - `ignore`：无条件放弃；`all`：永不放弃。
+- **文档**：`MCP-INTERFACE.md` `/ui` 字段表 + 时点四态表 + env；`PLAYBOOK-FULL.md` §4 字段表、启动配置（`YGO_CHAIN_MODE` 默认 normal）、§6.1 时间表"时点四态"行；README 更新记录。
+- **验证**：待 bot-scout（PASS 后本节补证据）。

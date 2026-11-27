@@ -285,7 +285,7 @@ body = PromptJson(g_shared);
 | `turnPlayer` / `isMyTurn` | int / bool | 谁的回合 |
 | `selftype` | int | 客户端自决类型（0=玩家…） |
 | `winPlayer` / `winReason` / `winReasonName` | int/int/string | 赢家（-1 未定）；原因见下 |
-| `chainMode` | int | 实际连锁时点（0=all 1=avail 2=ignore） |
+| `chainMode` | int | 实际连锁时点：**0=all（显示时点）/1=avail（可用时点）/2=ignore（忽略时点）/3=normal（全不按，默认）** |
 | `uiCleanupCount` | int | 动作后清理窗口的累计次数（诊断） |
 | `ui` | object | §4.4 的同一份 UI 诊断 |
 | `retryCount` / `retryStreak` / `lastRetryAfterMsg` | int | `MSG_RETRY` 统计（编码错了会飙升） |
@@ -400,9 +400,20 @@ body = PromptJson(g_shared);
 
 | 字段 | 说明 |
 |---|---|
-| `chainMode` / `chainModeName` | **真实**连锁时点（从控件布尔反推） |
-| `alwaysChain` / `chainWhenAvail` / `ignoreChain` | 三个真实 bool（all / avail / ignore） |
-| `desiredChainMode` / `appliedChainMode` / `applyPending` | 想要的 / 已应用的 / 是否待应用 |
+| `chainMode` / `chainModeName` | **真实**连锁时点（从控件布尔反推）：`0=all` / `1=avail` / `2=ignore` / **`3=normal`（全不按；对局默认）** |
+| `alwaysChain` / `chainWhenAvail` / `ignoreChain` | 三个真实 bool（all / avail / ignore）；**normal = 三个全 false** |
+| `desiredChainMode` / `appliedChainMode` / `applyPending` | 想要的 / 已应用的 / 是否待应用；`desiredChainMode` 同样支持 `3`（normal） |
+
+**时点四态（`normal` 已正式化，默认态）**：
+
+| 值 | 名称 | 三按钮 | 自动放弃（auto-decline）门 | 说明 |
+|---|---|---|---|---|
+| 0 | `all` | 显示时点 | 永不自动放弃 | 每个连锁窗口都问 |
+| 1 | `avail` | 可用时点 | 仅 `count==0` 时放弃 | 只问"有效果可发"的窗口 |
+| 2 | `ignore` | 忽略时点 | 无条件放弃 | 完全不问 |
+| **3** | **`normal`** | **三按钮全不按（客户端冷启动默认）** | **`count==0 \|\| specount==0` 时放弃** | **只在 spec/select-trigger 窗口询问**；进入对局默认此态（旧版 `/ui` 曾把该态误报为 `avail`） |
+
+> auto-decline 的判定在客户端 `duelclient.cpp:1886`（`count==0 || specount==0` 时放弃；`avail` 只看 `count==0`；`ignore` 无条件；`all` 永不）。`normal` 与 `avail` 的关键差异是**多了 `specount==0` 条件**，因此普通诱导窗口不会打扰、只保留 spec/select-trigger 窗口。
 | `popupMask` / `popups` | 五个主弹窗可见性（`posSelect/options/cardSelect/cmdMenu/message`） |
 | `windows[]` | 17 个窗口的 `name/visible/rect{l,t,r,b}/x,y,w,h/textLen`（`textLen` 仅 `wMessage/wACMessage/wQuery` 有值，其余 -1；有正文时额外带 `text`（≤120 字）） |
 | `windowsVisible[]` | 可见窗口名字数组（快速判空） |
@@ -924,7 +935,7 @@ UI close empty frame name=wMessage|wACMessage|wQuery
 |---|---|---|
 | `YGO_CONTROL_PORT` | `7788` | HTTP 端口（第二个客户端请显式设，例如 `7789`） |
 | `YGO_HOOKS` | `msg`+`analyze`（=3） | mask：`msg`=1、`analyze`=2、`stoc`=4、`all`=7。**房主用 `msganalyze`，客人 `all`；房主不能用 `all`**（开局会搞死进程） |
-| `YGO_CHAIN_MODE` | `avail` | 连锁时点 `all\|avail\|ignore`（开局自动应用，之后自愈重设） |
+| `YGO_CHAIN_MODE` | **`normal`** | 连锁时点 **`all\|avail\|ignore\|normal`**（`normal`=三按钮全不按、对局默认；旧行为默认 `avail`）。开局自动应用、之后自愈重设（4 态比较）。normal 的 auto-decline 门见 §4.7（`duelclient.cpp:1886`） |
 | `YGO_AUTO_DISMISS` | 1 | 自动关 `MSG_RETRY`/提示框并 `actionSignal.Set()`；`0` 关（调试） |
 | `YGO_PLACE_COORDS` | `server` | 选格坐标口径：`server`=按 LocalPlayer 规则修正；`local`=原始半区（A/B） |
 | `YGO_UI_ACTIONS` … | 见 §7.5 | UI 注入系列 |

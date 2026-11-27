@@ -129,6 +129,7 @@ node doctor.mjs --client "C:\path\to\YGOPro.exe" --strict-build   # 发布自检
 
 ### 更新记录（近期）
 
+- **2026-11-27** 时点（chain mode）正式扩为 **4 态**（客户端改动中，文档已预置）：`0=all(显示时点) / 1=avail(可用时点) / 2=ignore(忽略时点) / 3=normal(三按钮全不按)`，**进入对局默认 `normal`**（不再默认 `avail`）；`normal` 的 auto-decline 门是 `count==0 || specount==0`（`duelclient.cpp:1886`，只在 spec/select-trigger 窗口询问）；`YGO_CHAIN_MODE=all|avail|ignore|normal`（默认 `normal`），`/ui.chainMode`/`chainModeName`/`desiredChainMode` 均含 3；旧版 `/ui` 曾把第 4 态误报为 `avail`。指纹待 poc 新 exe 定稿后统一切。
 - **2026-11-26** 客户端 `10:26:12 / 6,335,488 B`：**座位坐标/`isMine` 统一修复版**——新增 `ToServerSeat(localCtrl,mySeat)`（本地视角→服务端座位：0→mySeat、1→1−mySeat、≥2 原样）；手牌/场面、候选卡、`chainList`/`chainStackSnap/Full`/`chainCandidates`、`places`（含 `ctrlRaw`）全部统一为 **`ctrl`=服务端座位、`isMine==(ctrl==mySeat)`、`name` 回填**；修正 `chainCandidates` isMine 先于 ctrl 的顺序 bug、chain 路径 label「我方/对手」用转换后 isMine；`lastChainEvent` 不变。验证 `seat-isMine-validation.md`（guest `mySeat=1` 时全部 `ctrl/isMine` 正确、host 回归不变、places `ctrl` 服务端/`ctrlRaw` 本地）。
 - **2026-11-23** 客户端 `14:53:57 / 6,334,464 B`（历史）：**MCP 实战反馈修复版**——`wait_prompt` 阻塞语义修正（`seq>since && awaiting`）、候选卡 `ctrl/isMine` 修正 + `selectableCards[].resp`（响应用 `resp`/`seqNo` 不是下标 `i`）、BUG-1 归类外部断线。现已被 `10:26:12` 版取代。
 - **2026-11-20** 客户端 `15:34:59 / 6,329,856 B`（历史）：**stall 诊断版**（判死逻辑不变）——`/net` 新增 `stallMs`/`oppTimeLeft`/`oppClockFresh`、`NET STALL`（`YGO_STALL_WARN_MS` 默认 120000/30s）；`stallMs>120s && oppClockFresh=false` = 对方卡住 → `control_leave` 离桌重排。现已被 `14:53:57` 版取代。
