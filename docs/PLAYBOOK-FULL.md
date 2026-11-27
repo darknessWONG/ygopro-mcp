@@ -2,7 +2,7 @@
 
 > **读者**：要真正操作这套桥接去排位/局域网打牌的 LLM agent（以及维护它的工程师）。
 > **目标**：零歧义——每一步"做什么、调什么、返回什么、怎么判定成功/失败、失败怎么修"。
-> **当前客户端构建**：`2026-11-26 10:26:12 / 6,335,488 B`，SHA256 `7D3A4D926340D5358E889CB39242F11D9B48C43E8DBFABEF072F5254A131286C`（`node doctor.mjs --client <exe> --strict-build` 可校验）。
+> **当前客户端构建**：`2026-11-27 11:04:58 / 6,334,976 B`，SHA256 `C1FBADF954046FF827182AFB523A5473AAED624FB8EB0CEE744B794F80929991`（`node doctor.mjs --client <exe> --strict-build` 可校验）。
 > **权威性**：本文是操作流程的权威；字段级契约见 [`MCP-INTERFACE.md`](MCP-INTERFACE.md)，排位实战记录见 [`RANKED-REPORT.md`](RANKED-REPORT.md)，精简单页见 [`MATCH-PLAYBOOK.md`](MATCH-PLAYBOOK.md)。
 > **本文所有示例字段名都按当前客户端真实输出**（可对照 `ranked/logs/playbook-samples/` 下的真实采样）。
 
@@ -603,6 +603,7 @@ control_act({ seq: <当前 seq>, hex: "000201" })
 
 > **启动客户端前的硬性配置**：`YGO_NET_DEAD_SILENCE_MS` 用**默认 60000** 即可（最多 120000）；**不要再长期设 600000**（真掉线 10 分钟才发现；probe 误判已修、看门狗 `clockFresh` 已修）。`17:33:31` 版起 `/net` 有 `ourTurn/oppTurn/timeLeft/clockFresh`，客户端 `net.heartbeat` 每 15s 打一条。旧 exe（默认 10s）才需要 600000。`10:25:14` 版另有 EOF guard：`YGO_PROMPT_AUTO_DEFAULT_MS=60000` / `YGO_PROMPT_IDLE_WARN_MS=45000`（默认即推荐值）。
 > **时点模式**：`YGO_CHAIN_MODE` 默认 **`normal`**（三按钮全不按；旧版默认 `avail`）。4 态：`all`/`avail`/`ignore`/`normal`；进对局自动应用、之后自愈重设（4 态比较）。`normal` 的 auto-decline 门是 `count==0 || specount==0`（`duelclient.cpp:1886`）——只在 spec/select-trigger 窗口问你，普通诱导窗口不打扰；想"每个窗口都问"设 `all`，想"完全不问"设 `ignore`。
+> **切时点**：`/ui?chain=all|avail|ignore|normal` → `desiredChainMode` 立即变；`real` 字段（`chainMode/chainModeName/三 bool`）在 apply 后**下一帧/≤1s** 刷新（`11:04:58` 版修好 guest 空闲 readback 旧值）；`/ui` 与 `/state.chainMode` 应一致，`applyPending=false` 表示已落地。
 
 | 动作 | 建议间隔/超时 | 说明 |
 |---|---|---|

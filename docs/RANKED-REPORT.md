@@ -369,7 +369,7 @@
 ## 19. 2026-11-27 时点四态 `normal` + 默认 `normal`
 
 - **背景（人工观察）**：`/ui` 的三按钮状态实际存在**第 4 态：三按钮全不按**（客户端冷启动默认），但旧版 `/ui` 把它**误报为 `avail`**（`chainMode:1`）；旧文档只记录 `0/1/2` 三态、`YGO_CHAIN_MODE` 默认 `avail`。
-- **修复（客户端改动中，poc 出 exe 后统一切指纹）**：
+- **修复（`2026-11-27 11:04:58 / 6,334,976 / C1FBADF9…`）**：
   - `chainMode` 正式扩为 **4 态**：`0=all(显示时点) / 1=avail(可用时点) / 2=ignore(忽略时点) / 3=normal(三按钮全不按)`；`chainModeName` 对应；
   - **进入对局默认 `normal`**（不再默认 `avail`）；`desiredChainMode` 也支持 `3`；apply/self-heal 按 **4 态**比较（旧版 3 态比较会把 normal 误判成 avail 而"纠正"回去）；
   - `YGO_CHAIN_MODE=all|avail|ignore|normal`（默认 `normal`）；保留 `alwaysChain/chainWhenAvail/ignoreChain` 原始布尔（normal = 三个全 false）。
@@ -378,4 +378,8 @@
   - `avail`：仅 `count==0` 时放弃；
   - `ignore`：无条件放弃；`all`：永不放弃。
 - **文档**：`MCP-INTERFACE.md` `/ui` 字段表 + 时点四态表 + env；`PLAYBOOK-FULL.md` §4 字段表、启动配置（`YGO_CHAIN_MODE` 默认 normal）、§6.1 时间表"时点四态"行；README 更新记录。
-- **验证**：待 bot-scout（PASS 后本节补证据）。
+- **验证（bot-scout `ranked/logs/chain-mode-normal-validation.md`，最终 build `C1FBADF9`）4 组 PASS**：
+  1. **进局默认 normal（双侧）**（`chain-mode-20261127-110632/`）：`/ui` = `chainMode=3/name=normal`、三 bool 全 false、`desired=applied=3`、`applyPending=false`；host + guest 均是。
+  2. **四态切换（guest 空闲侧重点 + host 对照）**：`all→0/alwaysChain=true`、`avail→1/chainWhenAvail=true`、`ignore→2/ignoreChain=true`、`normal→3/三 bool 全 false`；`desired/applied` 全程跟随、`applyPending=false`；guest 切换后 **150ms 首采样即正确（<1s）**；`/state.chainMode` 与 `/ui.chainMode` **28 采样 0 mismatch**；host 四态同样 PASS。
+  3. **normal 下链功能正常**：guest 收到 `MSG_SELECT_CHAIN`（`chainCandidates=[{code:27243130,name:"禁忌的圣枪",ctrl:1,isMine:true}]`）→ `activate` ok、`advanced:true`；全程 `retry=0`、无 RETRY/eof。
+  4. **中间 build `C9120889` 的 guest `/ui` real 不刷新已修**（对照 `chain-mode-20261127-110232/`）：root cause 是 `/ui?chain=` 未置 `g_snapshotWanted`、空闲 guest 无 STOC 触发 snapshot 重建；`C1FBADF9` 在 `ApplyChainMode` 末尾立即刷新 `g_shared` real 字段并置 `g_snapshotWanted`，guest 150ms 内生效。

@@ -4,8 +4,8 @@
 > **先读（操作流程）**：[`PLAYBOOK-FULL.md`](PLAYBOOK-FULL.md) —— 全流程权威操作手册（每步判定/工具速查/状态字典/排错）；本文档是字段与接口契约。
 >
 > **适用版本（当前正式版 exe）**：`mycard-client/bin/release/x64/YGOPro.exe`
-> = **2026-11-26 10:26:12 / 6,335,488 B**，SHA256 `7D3A4D926340D5358E889CB39242F11D9B48C43E8DBFABEF072F5254A131286C`
-> （2026-11-26 **座位坐标/`isMine` 统一修复版**：`ToServerSeat(localCtrl,mySeat)` 全路径统一——手牌/场面、候选卡、`chainList`/`chainStack*`/`chainCandidates`、`places`（含 `ctrlRaw`）的 **`ctrl` 一律服务端座位、恒有 `isMine==(ctrl==mySeat)`、`name` 回填**；修 `chainCandidates` isMine/ctrl 顺序、chain label「我方/对手」用转换后 isMine；guest（`mySeat=1`）旧版阵营反向（≤11-23 14:53:57 已修）。另含前版 MCP 实战修复（wait_prompt/resp）/stall/看门狗；验收/历史见文末记录）
+> = **2026-11-27 11:04:58 / 6,334,976 B**，SHA256 `C1FBADF954046FF827182AFB523A5473AAED624FB8EB0CEE744B794F80929991`
+> （2026-11-27 **时点四态 `normal` 定稿版**：`0=all / 1=avail / 2=ignore / 3=normal(三按钮全不按)`，**进对局默认 `normal`**；`ChainModeName(3)="normal"`、`YGO_CHAIN_MODE` 4 值默认 normal；`ApplyChainMode` m==3 清三 bool、self-heal 4 态比较；`/ui?chain=normal` setter + 应用后立即刷新 real 字段/`g_snapshotWanted`（guest 空闲 readback <1s 生效）。另含前版座位坐标/wait_prompt/stall/看门狗；验收/历史见文末记录）
 > `/state.resume.reason` 在加载成功时返回 `"loaded"`，行为不变；22:23:28 已做过冒烟）。
 > 该版含重连基础能力：`GET /net`、自动 `/tip` 探活、`YGO_SUPPRESS_MODALS` 模态框抑制、
 > `resume-context-<port>.json` journal、`POST /leave`（详见 [RECONNECT-DESIGN.md](RECONNECT-DESIGN.md)、[reconnect-lab.md](reconnect-lab.md)）。
@@ -413,10 +413,19 @@ body = PromptJson(g_shared);
 | 2 | `ignore` | 忽略时点 | 无条件放弃 | 完全不问 |
 | **3** | **`normal`** | **三按钮全不按（客户端冷启动默认）** | **`count==0 \|\| specount==0` 时放弃** | **只在 spec/select-trigger 窗口询问**；进入对局默认此态（旧版 `/ui` 曾把该态误报为 `avail`） |
 
-> auto-decline 的判定在客户端 `duelclient.cpp:1886`（`count==0 || specount==0` 时放弃；`avail` 只看 `count==0`；`ignore` 无条件；`all` 永不）。`normal` 与 `avail` 的关键差异是**多了 `specount==0` 条件**，因此普通诱导窗口不会打扰、只保留 spec/select-trigger 窗口。
+| 其他字段 | 说明 |
+|---|---|
 | `popupMask` / `popups` | 五个主弹窗可见性（`posSelect/options/cardSelect/cmdMenu/message`） |
 | `windows[]` | 17 个窗口的 `name/visible/rect{l,t,r,b}/x,y,w,h/textLen`（`textLen` 仅 `wMessage/wACMessage/wQuery` 有值，其余 -1；有正文时额外带 `text`（≤120 字）） |
 | `windowsVisible[]` | 可见窗口名字数组（快速判空） |
+
+> auto-decline 的判定在客户端 `duelclient.cpp:1886`（`count==0 || specount==0` 时放弃；`avail` 只看 `count==0`；`ignore` 无条件；`all` 永不）。`normal` 与 `avail` 的关键差异是**多了 `specount==0` 条件**，因此普通诱导窗口不会打扰、只保留 spec/select-trigger 窗口。
+
+**设置与生效时机（`11:04:58` 版）**：
+- 设置：`GET /ui?chain=all|avail|ignore|normal`（或 MCP 无对应工具时直接调 HTTP）；写 `desiredChainMode`。
+- **`desiredChainMode` 立即变**；`real` 字段（`chainMode/chainModeName/alwaysChain/chainWhenAvail/ignoreChain`）在 apply 后**下一帧/≤1s** 刷新：`ApplyChainMode` 末尾立即更新 `g_shared` real 字段并置 `g_snapshotWanted`（修掉 guest 空闲时 `/ui` readback 旧值的问题）。
+- **`/ui` 与 `/state.chainMode` 应一致**（guest 空闲切换后 150ms 首采样即正确；实测 28 采样 0 mismatch）。
+- `applyPending=false` 表示已落地；若为 `true` 再等 ≤1s 重读。
 
 窗口名（`CollectWindows`，~L669）：`wMessage wACMessage wQuery wSurrender wOptions wPosSelect wCardSelect wCardDisplay wANNumber wANCard wANAttribute wANRace wCmdMenu wHand wFTSelect wBigCard wChat`。
 
@@ -988,7 +997,7 @@ $env:YGO_UI_ACTIONS='0'; powershell ... bridge\lan-run.ps1 -Games 1
 5. **链字段有 1 帧延迟**：`/state` 与 `/prompt` 的链字段来自 UI 线程快照；`chainStack[].forced` 恒 false、`type` 固定 `effect`。
 6. **UI 模式个别动作有 600ms 校验延迟**（点不中时才会走满）。
 7. **多效果卡默认点第 0 个 option**（可能不是最优效果）；`announce/counter/sort/sum` 是"安全默认"而非最优。
-8. **线上排位：能完整打完，但胜率依赖策略**：客户端/管线侧已实测可拿房→进房→选卡组→准备→完整对局→自然结算（LP_ZERO 等），并支持受控掉线后约 13s 重连回同房继续打；输局主要是 policy 保守（大量 `decline`/`to_bp`/`end`），不是管线卡死。**排位相关新字段（`/state.deckError`、`/state.isWin/isLoss/isDraw`、`/state.lpOrder`、`/state.pipeline.recentMsgs`、`/state.tpPending`+`/state.tpOptions`、`/actions` 的先/后攻动作 `kind:"tp"`+`index:1|2`、`/state.sidePending`、`/actions` 的换备牌动作 `kind:"side_ok"`（Bo3 每局之间，`id=0` → `btnSideOK`/`SendUpdateDeck`）、**`/state.side`（`available/pending/waiting/elapsedMs/waitingSeen/lastWaitMs/main/extra/side/counts/pre/limits/error`）+ `POST /side_swap`（真正换牌）+ `side_ok` 竞态修复**、**`/state.match`（`game`/`over`/`games[]`（含 `win`/`winnerSeat`/`reasonName`）/`gamesWonLocal`/`gamesWonOpp`/`lastWinnerLocal`/`lastReasonName`，配合 `control_match` 一句话报结果）**、`CHAIN raw` 等；Bo3 Game2/3 开局客户端会 `DUEL_START reset result state` 重置 `winPlayer/winReason`）只在客户端 `2026-11-26 10:26:12 / 6,335,488 B`（sha256 `7D3A4D926340D5358E889CB39242F11D9B48C43E8DBFABEF072F5254A131286C`）及之后存在**；旧 exe 请先升级。详见 [`RANKED-REPORT.md`](RANKED-REPORT.md)。
+8. **线上排位：能完整打完，但胜率依赖策略**：客户端/管线侧已实测可拿房→进房→选卡组→准备→完整对局→自然结算（LP_ZERO 等），并支持受控掉线后约 13s 重连回同房继续打；输局主要是 policy 保守（大量 `decline`/`to_bp`/`end`），不是管线卡死。**排位相关新字段（`/state.deckError`、`/state.isWin/isLoss/isDraw`、`/state.lpOrder`、`/state.pipeline.recentMsgs`、`/state.tpPending`+`/state.tpOptions`、`/actions` 的先/后攻动作 `kind:"tp"`+`index:1|2`、`/state.sidePending`、`/actions` 的换备牌动作 `kind:"side_ok"`（Bo3 每局之间，`id=0` → `btnSideOK`/`SendUpdateDeck`）、**`/state.side`（`available/pending/waiting/elapsedMs/waitingSeen/lastWaitMs/main/extra/side/counts/pre/limits/error`）+ `POST /side_swap`（真正换牌）+ `side_ok` 竞态修复**、**`/state.match`（`game`/`over`/`games[]`（含 `win`/`winnerSeat`/`reasonName`）/`gamesWonLocal`/`gamesWonOpp`/`lastWinnerLocal`/`lastReasonName`，配合 `control_match` 一句话报结果）**、`CHAIN raw` 等；Bo3 Game2/3 开局客户端会 `DUEL_START reset result state` 重置 `winPlayer/winReason`）只在客户端 `2026-11-27 11:04:58 / 6,334,976 B`（sha256 `C1FBADF954046FF827182AFB523A5473AAED624FB8EB0CEE744B794F80929991`）及之后存在**；旧 exe 请先升级。详见 [`RANKED-REPORT.md`](RANKED-REPORT.md)。
 9. **被动判死（对手回合 60s eff + `NET silence diag`）**：对手长时间不出手时，客户端会按"对手回合 60s eff"推进判定，并在 `/net` 相关日志打 `NET silence diag`（链路静默诊断，不主动断线）；被动判死不是本仓库 policy 的行为，属客户端/服务端规则。`/net` 的 `alive`/`sinceLastStoc` 在静默期会持续增长——要区分"对手在思考（slow play）"和"对手掉线"，以 `NET silence diag` + `/net.probe` 的 `fails`/`rttMs` 判断；详见 `mycard-client/docs/CONTROL-API.md` 的 `/net` 一节。
 10. **控制驱动下 `STOC_REPLAY` 直接跳过（`replay: dialog skipped`）**：不会弹回放对话框、**不阻塞网络线程**（否则回放保存框会卡住后续 STOC）。**已 LAN 实测**（2026-11-13：双方各 2 次 `replay: dialog skipped (control-driven, no wait)`、`replay-save=0`、`stoc=23 stall=0`）；排位 LP_ZERO 结算场景同样走该路径（不再需要"未实测"假设）。若上线后出现结算后收不到后续包，先查这里。
 11. **prompt 空等 ~90s 会被服务端按 AFK `eof` 踢（MC 排位行为）；LAN srvpro 不踢 eof，而是 180s `TIMEOUT` 判负**（证据 `ranked/logs/eof-guard-validation.md`、`control-23776.log`）。`10:25:14` 版起默认 `YGO_PROMPT_AUTO_DEFAULT_MS=60000` 自动发保守默认动作兜底（45s 先打 `PROMPT idle warning`），可用 `/prompt.awaitingSinceMs` 看等待时长；`0`=关闭（不建议）。

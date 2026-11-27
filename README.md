@@ -27,7 +27,7 @@
 
 | 需要 | 说明 |
 |---|---|
-| **带控制层的 YGOPro 客户端** | 本仓库**不包含**客户端二进制。控制层是客户端源码里的扩展（`gframe/control*.cpp`，HTTP 端点 `/state` `/prompt` `/wait_prompt` `/actions` `/act_id` `/net` `/ui` 等）。<br>**已测试构建**：`YGOPro.exe` **`2026-11-26 10:26:12` / `6,335,488 B`**<br>SHA256：`7D3A4D926340D5358E889CB39242F11D9B48C43E8DBFABEF072F5254A131286C`<br>核对：`node doctor.mjs --client <exe>`（默认比 size；加 `--strict-build` 同时比 sha256 —— 用于区分"同 size 不同 build"）。<br>构建：用带控制层补丁的 YGOPro 源码（MyCard 客户端 fork）自行编译，产物放到例如 `mycard-client/bin/release/x64/YGOPro.exe`。 |
+| **带控制层的 YGOPro 客户端** | 本仓库**不包含**客户端二进制。控制层是客户端源码里的扩展（`gframe/control*.cpp`，HTTP 端点 `/state` `/prompt` `/wait_prompt` `/actions` `/act_id` `/net` `/ui` 等）。<br>**已测试构建**：`YGOPro.exe` **`2026-11-27 11:04:58` / `6,334,976 B`**<br>SHA256：`C1FBADF954046FF827182AFB523A5473AAED624FB8EB0CEE744B794F80929991`<br>核对：`node doctor.mjs --client <exe>`（默认比 size；加 `--strict-build` 同时比 sha256 —— 用于区分"同 size 不同 build"）。<br>构建：用带控制层补丁的 YGOPro 源码（MyCard 客户端 fork）自行编译，产物放到例如 `mycard-client/bin/release/x64/YGOPro.exe`。 |
 | **Node.js ≥ 18** | 只用内置模块（`fetch`/`http`/`child_process`），**零 npm 依赖**。 |
 | （可选）卡组 `.ydk` | 客户端自己的 `deck/` 目录；控制层用 `POST /deck?name=Blackwing` 预载。本仓库不含卡图/卡表。 |
 
@@ -129,8 +129,8 @@ node doctor.mjs --client "C:\path\to\YGOPro.exe" --strict-build   # 发布自检
 
 ### 更新记录（近期）
 
-- **2026-11-27** 时点（chain mode）正式扩为 **4 态**（客户端改动中，文档已预置）：`0=all(显示时点) / 1=avail(可用时点) / 2=ignore(忽略时点) / 3=normal(三按钮全不按)`，**进入对局默认 `normal`**（不再默认 `avail`）；`normal` 的 auto-decline 门是 `count==0 || specount==0`（`duelclient.cpp:1886`，只在 spec/select-trigger 窗口询问）；`YGO_CHAIN_MODE=all|avail|ignore|normal`（默认 `normal`），`/ui.chainMode`/`chainModeName`/`desiredChainMode` 均含 3；旧版 `/ui` 曾把第 4 态误报为 `avail`。指纹待 poc 新 exe 定稿后统一切。
-- **2026-11-26** 客户端 `10:26:12 / 6,335,488 B`：**座位坐标/`isMine` 统一修复版**——新增 `ToServerSeat(localCtrl,mySeat)`（本地视角→服务端座位：0→mySeat、1→1−mySeat、≥2 原样）；手牌/场面、候选卡、`chainList`/`chainStackSnap/Full`/`chainCandidates`、`places`（含 `ctrlRaw`）全部统一为 **`ctrl`=服务端座位、`isMine==(ctrl==mySeat)`、`name` 回填**；修正 `chainCandidates` isMine 先于 ctrl 的顺序 bug、chain 路径 label「我方/对手」用转换后 isMine；`lastChainEvent` 不变。验证 `seat-isMine-validation.md`（guest `mySeat=1` 时全部 `ctrl/isMine` 正确、host 回归不变、places `ctrl` 服务端/`ctrlRaw` 本地）。
+- **2026-11-27** 客户端 `11:04:58 / 6,334,976 B`：**时点四态 `normal` 定稿版**——`0=all / 1=avail / 2=ignore / 3=normal(三按钮全不按)`，**进入对局默认 `normal`**（不再默认 `avail`）；`ChainModeName(3)="normal"`、`YGO_CHAIN_MODE` 支持 4 值且默认 `normal`；`ApplyChainMode` m==3 清三 bool、self-heal 按 4 态比较；**`/ui?chain=normal` setter** + 应用后立即刷新 `g_shared` real 字段并置 `g_snapshotWanted`（修 guest 空闲时 `/ui` readback 旧值；切换后 <1s 生效）；`/ui`/`/state.chainMode` 4 态一致、三原始 bool 保留。验证 `chain-mode-normal-validation.md`：进局默认 normal（双侧）、四态切换 <1s + 0 mismatch、normal 下链窗口正常、retry/eof=0。
+- **2026-11-26** 客户端 `10:26:12 / 6,335,488 B`（历史）：**座位坐标/`isMine` 统一修复版**——`ToServerSeat(localCtrl,mySeat)` 全路径统一（`ctrl`=服务端座位、`isMine==(ctrl==mySeat)`、`name` 回填）、`places` 含 `ctrlRaw`、chain label 修正；验证 `seat-isMine-validation.md`。现已被 `11:04:58` 版取代。
 - **2026-11-23** 客户端 `14:53:57 / 6,334,464 B`（历史）：**MCP 实战反馈修复版**——`wait_prompt` 阻塞语义修正（`seq>since && awaiting`）、候选卡 `ctrl/isMine` 修正 + `selectableCards[].resp`（响应用 `resp`/`seqNo` 不是下标 `i`）、BUG-1 归类外部断线。现已被 `10:26:12` 版取代。
 - **2026-11-20** 客户端 `15:34:59 / 6,329,856 B`（历史）：**stall 诊断版**（判死逻辑不变）——`/net` 新增 `stallMs`/`oppTimeLeft`/`oppClockFresh`、`NET STALL`（`YGO_STALL_WARN_MS` 默认 120000/30s）；`stallMs>120s && oppClockFresh=false` = 对方卡住 → `control_leave` 离桌重排。现已被 `14:53:57` 版取代。
 - **2026-11-19** 客户端 `17:33:31 / 6,330,368 B`（历史）：**看门狗回归修复版**（修 `g_timeLeft` 不清零导致 `clockRunning` 永久 true）——`g_timeLeftTick` + `clockFresh(<3s)` + `clockRunning=ourTurn&&clockFresh`；`/net` 新增 `ourTurn/oppTurn/timeLeft/clockFresh`；heartbeat 空闲时 15s；验证 `net-watchdog-validation.md` 4/4 PASS；**不再建议 600000**（默认 60000）。现已被 `15:34:59` 版取代。
