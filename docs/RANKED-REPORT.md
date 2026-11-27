@@ -424,3 +424,18 @@
   5. 双侧 `side_ok` → game2 `inDuel:true`；
   6. game2 surrender 后的新窗口：`changed:false` 复位；全程 `retry=0`、无 eof。
   - 注：**`changed` 是 `/actions` 返回对象的顶格字段**（实测确认与 `actions[]` 同级，不在 action 元素里）。
+
+---
+
+## 22. 2026-11-27 defense position 非法值 + `ignore` 吞诱发
+
+- **现象 A（BUG-1，P0）**：`MSG_SELECT_POSITION`（`curMsg=19`）时 `/actions` 只有两项（`attack position`=1 / `defense position`=2）；**选 defense → 服务器不推进**（`seq` 原地不动、同一 prompt 连发，实测 `seq 10→11→12`）——低攻怪无法摆守备。
+- **现象 B（BUG-4，P1）**：`chainMode=ignore(2)` 时 `curMsg 16 (SELECT_CHAIN)` 窗口仍反复弹给 LLM（`ignore` 不能压调用数）；更严重的是会**吞掉我方诱发**：日志 `CHAIN client auto-decline count=1 ignore=1 avail=0` → `SEND RESPONSE curMsg=16 len=4 i=-1`（本家"抽到时→特召"/"西艾萝抽卡"被自动放弃，2026-11-26 G2 白丢一回合）。
+- **根因**：
+  - A：`control_sem.cpp:144` 把 position 动作写死 `0x02`（`AddSem(...,"defense position",0x02,...)`），而引擎要 POS 位值（`ocgcore/common.h:75-82`：`POS_FACEUP_ATTACK 0x1` / `POS_FACEDOWN_ATTACK 0x2` / `POS_FACEUP_DEFENSE 0x4` / `POS_FACEDOWN_DEFENSE 0x8`）。**`0x02` = 里侧攻击**；合法掩码常为 `0x1|0x4`（表攻/表守）→ `0x02` 不在掩码内 ⇒ 非法响应 ⇒ 服务器忽略并重发 prompt。
+  - B：auto-decline 门只按 `count/specount` 判断，**未区分候选归属**（我方诱发 vs 响应对手），`ignore` 无差别放弃。
+- **修复（poc 出 build 中，指纹待定）**：
+  - `MSG_SELECT_POSITION` 时保存合法掩码到 `/prompt.selectablePositions`；`/actions` **按掩码动态生成** 4 种 position 动作，`index` = **真实 POS 位值**（`0x1/0x2/0x4/0x8`）；掩码单 bit 时客户端**自动应答**（不出窗口）。
+  - `ignore` 的 auto-decline 门**保留含我方候选的窗口**（按候选归属判断）；新增 `YGO_CHAIN_IGNORE_KEEP_OWN`（默认 **1**）。
+- **文档**：`MCP-INTERFACE.md` §4.4 加 `selectablePositions`、§5 position 行动态 4 种 + "index 就是 POS 值"；`PLAYBOOK-FULL.md` §3.7 position 行 + §4.4 字段补 `selectablePositions`。
+- **验证**：待 bot-scout（PASS 后本节补证据）。

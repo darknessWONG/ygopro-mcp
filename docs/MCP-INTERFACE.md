@@ -347,6 +347,7 @@ guest 应为 `seat=1 isFirst=0`、host `seat=0 isFirst=1`（`selftype` 依赖服
 | `awaitingSinceMs` | **仅 `awaiting=true` 时出现**：等待已持续毫秒；>45s 客户端打 `PROMPT idle warning`，默认 60s 自动兜底（`YGO_PROMPT_AUTO_DEFAULT_MS`，见 §8.1） |
 | `announceNumberValues` | **仅 `MSG_ANNOUNCE_NUMBER(143)` 时出现**：可用数值列表（int32）；`/actions` 为每个值给一条 `kind:"announce_number"`，选中后响应 = **数值本身**（不是下标） |
 | `canBp` / `canEp` | 可否进战阶 / 可否结束阶段 |
+| `selectablePositions` | **仅 `MSG_SELECT_POSITION(19)` 时出现**：合法 POS **掩码**（`0x1` 表攻 / `0x2` 里攻 / `0x4` 表守 / `0x8` 里守 的按位或）。`/actions` 按该掩码**动态生成** position 动作（`index` = 对应 POS 位值，不是 1/2）；**单 bit 掩码时客户端自动应答、不弹窗口**（如只要守备 `0x4`） |
 | `sumTarget` / `sumMode` | 素材合计目标值 / 合计方式（用于 `MSG_SELECT_SUM`） |
 | `isFirst` / `placeCoords` | 是否先手 / 当前选格坐标口径（`server`\|`local`） |
 
@@ -465,7 +466,7 @@ guest 应为 `seat=1 isFirst=0`、host `seat=0 isFirst=1`（`selftype` 依赖服
 | `select` | `MSG_SELECT_CARD`(15)/`SELECT_TRIBUTE`(20)/`SELECT_UNSELECT_CARD`(26) | `select first N card(s)` | 一次选前 N 张（N=`selectMin` 或 1）；**旧版只有这一条 → 永远选 selectable[0]** |
 | `select_card`（15:18:21 起，单目标） | `MSG_SELECT_CARD`(15)/`SELECT_TRIBUTE`(20)/`SELECT_UNSELECT_CARD`(26) | `attack target: card #1 code=1500 atk=1500 def=1200 loc=4 seq=0` | **每个候选一条**，`index=i`；编码 `[1][候选 seqNo]`；**攻击目标必须用它按 atk/def 选** |
 | `select_auto`（15:18:21 起） | 同上（`selectMin>1` 时只有它） | `select_auto` | 兜底：`[n][seqNo...]`；**单目标时等价旧 `id=0`（永远第一只）**，不要拿它打有对象的攻击 |
-| `position` | `MSG_SELECT_POSITION`(19) | `attack position` / `defense position` | `0x01` / `0x02` |
+| `position` | `MSG_SELECT_POSITION`(19) | **按合法掩码动态生成 4 种**：`attack position (face-up ATK)` / `attack position (face-down ATK / set)` / `defense position (face-up DEF)` / `defense position (face-down DEF / set)` | **`index` 就是 POS 位值**：`0x1` / `0x2` / `0x4` / `0x8`——**不要用 1/2 猜**（旧版写死 `defense=0x02` 实际是"里侧攻击"，非法响应导致 `seq` 连发不推进） |
 | `place` | `MSG_SELECT_PLACE`(18)/`MSG_SELECT_DISFIELD`(24) | `place bit=8 mask=0 ctrl=1 p0=1 seat=1 first=0 loc=8 seq=0` | index=places 下标；4 变体自愈（`placeVariant`） |
 | `sum` | `MSG_SELECT_SUM`(23) | `auto-select materials` | 自动选素材 |
 | `counter` | `MSG_SELECT_COUNTER`(22) | `auto-place counters` | 自动放指示物 |
@@ -478,6 +479,7 @@ guest 应为 `seat=1 isFirst=0`、host `seat=0 isFirst=1`（`selftype` 依赖服
 - `id` 是候选数组下标，**prompt 一变就重新编号**；`label` 只是给人/LLM 看的，不要解析出行为依赖。
 - `kind` 是稳定语义；策略只判断 `kind` + `label`/卡号即可。
 - `place` 的 `ctrl`/`loc`/`seq` 是客户端已按"本地半区"规则修正过的值；遇到 `MSG_RETRY` 客户端会自动换变体重试（`placeVariant`）。
+- **`position`（`MSG_SELECT_POSITION`=19）**：合法位置来自该消息的**掩码**（`/prompt.selectablePositions`），`/actions` **按掩码动态生成**可选项；`index` 直接用 POS 位值（`0x1` 表攻 / `0x2` 里攻 / `0x4` 表守 / `0x8` 里守），**不要用 1/2 猜**。掩码只有单 bit（如 `0x4`）时客户端**自动应答**、不弹窗口；合法掩码常是 `0x1|0x4`（表攻或表守） → 旧版固定送 `0x02`（里攻，不在掩码内）⇒ 服务器忽略并重发 prompt（`seq` 连发）。
 - `MSG_SELECT_CHAIN` 的 `chain`/`decline` 与 §6 的 `chainCandidates[].index` **一一对应**。
 
 ---

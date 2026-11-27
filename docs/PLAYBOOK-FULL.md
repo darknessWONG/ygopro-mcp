@@ -283,7 +283,7 @@ loop:
 | `chain`/`decline` | `MSG_SELECT_CHAIN` | 接/不接连锁；`canDecline=false` 时必须接 |
 | `yes`/`no` | 是否系 | 1/0 |
 | `option` | 多效果选择 | 选第 N 个（默认 0 可能不是最优） |
-| `position` | 表示形式 | `attack`/`defense` |
+| `position` | 表示形式（`MSG_SELECT_POSITION`=19） | **按 `/prompt.selectablePositions` 掩码动态生成**：`attack position (face-up ATK)`=0x1 / `attack position (face-down ATK / set)`=0x2 / `defense position (face-up DEF)`=0x4 / `defense position (face-down DEF / set)`=0x8；**`index` 就是 POS 位值，别用 1/2 猜**（旧版写死 defense=0x02 是"里侧攻击"，非法响应导致 `seq` 连发）；单 bit 掩码客户端自动应答 |
 | `place` | 放格子 | 选合法格（label 带 bit/mask/ctrl/loc/seq） |
 | `select` | 选卡（旧版唯一一条） | 选前 N 张（N=`selectMin`）——单目标时**永远选第一只**，攻击目标别用 |
 | **`select_card`（15:18:21 起，单目标）** | `MSG_SELECT_CARD/TRIBUTE/UNSELECT_CARD` | **每个候选一条**（`index=i`，label `attack target: card #i code=.. atk=.. def=.. loc=.. seq=..`）；**攻击目标必须按 `atk/def` 选这张**（编码 `[1][seqNo]`） |
@@ -525,6 +525,7 @@ control_act({ seq: <当前 seq>, hex: "000201" })
 | 可召唤计数 | `summonable` `spsummonable` `msetable` `ssetable` `reposable` `activatable` `attackable` `chains` `chainForced` `lastChain` |
 | 选卡 | `selectMin` `selectMax` `selectCancelable` `selectableCount` `selectableCards`（每项含 `i/code/atk/def/lv/position/loc/seq,seqNo,resp,ctrl,isMine`；`14:53:57` 起 `ctrl/isMine` 已修、新增 `resp`）。**`i` 是列表下标（只给 `control_actions` id 用）；响应字节用 `resp`（= `seqNo`，select_seq）：`hex="01"+resp hex`**（如 `resp=9` → `hex="0109"`）。首选 `control_actions` 的 `kind:"select_card"` id，别手拼 hex；**`isAttackTarget`**（`15:18:21` 起：战斗目标窗=true，必须用 `select_card` 按 `atk/def` 选） |
 | 宣言 | `announceNumberValues`（仅 `MSG_ANNOUNCE_NUMBER(143)`：可用数值列表，`announce_number` 的候选；响应=数值本身） |
+| 表示形式 | `selectablePositions`（仅 `MSG_SELECT_POSITION(19)`：合法 POS 掩码 `0x1` 表攻 / `0x2` 里攻 / `0x4` 表守 / `0x8` 里守 的按位或；`/actions` 按掩码动态生成 position 动作，`index`=POS 位值；单 bit 自动应答） |
 | 阶段 | `canBp` `canEp` |
 | 候选卡 | `summonableCards` `spsummonableCards` `msetableCards` `ssetableCards` `activatableCards` `attackableCards` |
 | 连锁 | `chainDepth` `chainStack` `chainingTo` `chainCandidates` `canDecline` `hint` `lastChainEvent`（阵营文本如 `我方发动 [黑洞]…`/`对手发动 […]`；**敌我按 `mySeat` 判定**——服务端 `cc` 与 `mySeat` 比较；`mySeat` 来自 `dInfo.isFirst`，`SEAT resolved seat=.. isFirst=..` 日志可核对） |
